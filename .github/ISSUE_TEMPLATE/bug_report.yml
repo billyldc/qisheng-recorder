@@ -1,0 +1,23 @@
+name: Bug report
+description: Report capture, selection or replay automation problems.
+body:
+  - type: input
+    id: environment
+    attributes:
+      label: macOS / app version / display
+      placeholder: macOS 15.6, app 1.0.0, MacBook built-in display
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps and expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result and relevant app log
+      description: Exclude passwords, personal recordings and unrelated screen content.
+    validations:
+      required: true

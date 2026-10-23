@@ -1,0 +1,44 @@
+name: Build macOS app
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Source privacy audit
+        run: python3 scripts/privacy_audit.py --tree .
+      - name: Git history privacy audit
+        run: python3 scripts/privacy_audit.py .
+      - name: Install video-test dependency
+        run: brew install ffmpeg
+      - name: Build and test native application
+        run: bash scripts/build_app.sh
+      - name: Worker regression tests
+        run: .build-tools/bin/python -m unittest discover -s worker/tests -v
+      - name: Package
+        run: bash scripts/package_release.sh
+      - name: Upload installation packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Qisheng-Recorder-macOS-${{ runner.arch }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          retention-days: 14

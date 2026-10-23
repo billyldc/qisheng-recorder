@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>Qisheng Recorder</string>
+  <key>CFBundleDisplayName</key><string>七圣召唤录制器</string>
+  <key>CFBundleIdentifier</key><string>io.github.billyldc.QishengRecorder</string>
+  <key>CFBundleExecutable</key><string>QishengRecorder</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleVersion</key><string>25</string>
+  <key>CFBundleShortVersionString</key><string>1.6.0</string>
+  <key>QishengUpdateRepository</key><string>billyldc/qisheng-recorder</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSMinimumSystemVersion</key><string>15.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSScreenCaptureUsageDescription</key><string>录制你选中的七圣召唤游戏区域与系统声音，并在本机识别对局信息。</string>
+  <key>NSAudioCaptureUsageDescription</key><string>将游戏的系统声音写入回放视频。</string>
+  <key>NSHumanReadableCopyright</key><string>© 2026 billyldc. Game artwork belongs to HoYoverse.</string>
+</dict></plist>

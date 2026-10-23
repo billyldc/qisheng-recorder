@@ -1,0 +1,54 @@
+{
+  "Contents/Resources/portrait-worker/_internal/cv2/cv2.abi3.so": {
+    "category": "local-home",
+    "match_sha256": ["284ea60cf491cbb02ddfd99e06bf52ccff1c15499768a67cb6c91d9a5bbf5ae7"],
+    "reason": "Build-host path already present in the official opencv-python-headless 5.0.0.93 wheel, not the app builder's home."
+  },
+  "Contents/Resources/portrait-worker/_internal/cv2/.dylibs/librav1e.0.8.0.dylib": {
+    "category": "local-home",
+    "match_sha256": ["8dbca0ace285664e490ef4567f6c6b2b258c23dae3b69f5d8c3999392bdb03c5"],
+    "reason": "Upstream build-host path verified in the official OpenCV wheel before packaging."
+  },
+  "Contents/Resources/portrait-worker/_internal/cv2/.dylibs/libglib-2.0.0.dylib": {
+    "category": "private-network",
+    "match_sha256": ["551ddf8b5dff17e9c4ad007928473c61f3b47c71bcec1a659100f30d49669c5c"],
+    "reason": "Literal library example verified in the official OpenCV wheel before packaging."
+  },
+  "Contents/Resources/portrait-worker/_internal/cv2/.dylibs/libgnutls.30.dylib": {
+    "category": "credential",
+    "match_sha256": [
+      "7f173f65ea04836d5d5fab00afa67897e71dbc01662db9bcbe807b8507b20487",
+      "a3d8965527fc3e07ed347c6d68cc95cc5511ae90a6ed7b9e9d443eceb2f5eaff",
+      "eb3a393a358bbb3f3891c21e759168588b391ba563a937a443d2f9033e53b3e9",
+      "ac115ee0c9acdd92c2ef02882023227cc3e5627cad527b12078976ce4503d754",
+      "d1dc75186fa035add68642556d4cdf68b2a1b74b4b60761b17f08fca7c79a606",
+      "ac1e3b0c79d47689562ef8e864681b377afea59a786db073f647704adfcc82f4",
+      "c41dc6cc1361b41b23dc261c959bed84bae2387ae3f196b1a60b0c61dd195d5b"
+    ],
+    "reason": "Embedded GnuTLS library fixtures, byte-for-byte present in the official OpenCV wheel before building; not user credentials or signing keys."
+  },
+  "ipaddress": {
+    "category": "private-network",
+    "match_sha256": [
+      "b0d56c1d28390f7e4ece0ae355b30ebe8c8618788c2d769736a939a7e0bb4dd4",
+      "4b2228c26597aecab7d5894eb1ec83d915bc2e1a75d758b3b53471ce6aa2c91c",
+      "4fb0798e0eb02d5310d95142b51ddadf3d03fcd929382309589f573c0f923264",
+      "5da4236dba69f926f858153f06d49edc73f54ce8cd226d7239d1948e663610e0"
+    ],
+    "reason": "Standard address-range definitions verified in CPython 3.14.6 ipaddress.py."
+  },
+  "numpy.lib._datasource": {
+    "category": "local-home",
+    "match_sha256": [
+      "9df2aebc18ec57c4d4685af795e0754d00af7c12ed333a5fa8aaa677618c6eb9",
+      "373ccb98dde02c54fda942bdaa9c29c7c6454147809bd0f85e7e12e116707d1f",
+      "b98d692c4574a80e508cf6fa38e6f27ae5348e616448edaa7fe675e363669fd2"
+    ],
+    "reason": "Docstring examples verified in the official NumPy 2.5.2 source."
+  },
+  "urllib.request": {
+    "category": "private-network",
+    "match_sha256": ["37d7a80604871e579850a658c7add2ae7557d0c6abcc9b31ecddc4424207eba3"],
+    "reason": "Docstring example verified in CPython 3.14.6 urllib/request.py."
+  }
+}
