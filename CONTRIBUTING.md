@@ -2,7 +2,7 @@
 
 ## Build and test
 
-Use macOS 15+, Xcode command line tools, and Python 3.14. Run
+Use macOS 15+, Xcode command line tools, and Homebrew Python 3.14, matching CI. Run
 `bash scripts/build_app.sh`, then `.build-tools/bin/python -m unittest discover -s worker/tests -v`.
 The build creates a separate app in the build cache, not in Applications; it does
 not install, request recording permissions, or change an existing installation.
