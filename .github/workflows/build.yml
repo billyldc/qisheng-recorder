@@ -6,6 +6,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      upload_packages:
+        description: 'Upload ad-hoc test packages (requires available Actions storage)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -35,6 +40,7 @@ jobs:
       - name: Package
         run: bash scripts/package_release.sh
       - name: Upload installation packages
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_packages }}
         uses: actions/upload-artifact@v4
         with:
           name: Qisheng-Recorder-macOS-${{ runner.arch }}
@@ -43,3 +49,4 @@ jobs:
             dist/*.zip
             dist/SHA256SUMS.txt
           retention-days: 14
+          if-no-files-found: error
