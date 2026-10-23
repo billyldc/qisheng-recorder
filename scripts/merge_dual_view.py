@@ -292,7 +292,7 @@ def render(plan, output, preview=False):
         (staging/'filter.txt').write_text(graph, encoding='utf-8')
         command = [executable('ffmpeg'), '-hide_banner', '-nostdin', '-loglevel', 'warning', '-n',
                    '-i', str(paths['own']), '-i', str(paths['opponent']), '-filter_complex_threads', '2',
-                   '-filter_complex_script', 'filter.txt', '-map', '[video]']
+                   '-/filter_complex', 'filter.txt', '-map', '[video]']
         if media['own']['audio']:
             command += ['-map', '[audio]', '-c:a', 'aac', '-b:a', '192k']
         command += ['-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-pix_fmt', 'yuv420p',
