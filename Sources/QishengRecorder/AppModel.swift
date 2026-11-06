@@ -129,13 +129,13 @@ final class AppModel: ObservableObject {
         if !screenAllowed || !accessibilityAllowed { return "请先在「首次设置」开启屏幕录制和辅助功能权限；点击「只保活」会提示缺少的权限。" }
         if keepAliveOnly {
             return keepAliveTarget?.usesDocumentBinding == true
-                ? "只保活正在运行，绑定 Safari 当前云原神页面；页面身份改变后停止并需重选。不录制，关闭主窗口仍继续，锁屏或退出时停止。"
+                ? "只保活正在运行，绑定当前云原神页面；切换标签或刷新页面会停止并需重选。不录制，关闭主窗口仍继续，锁屏或退出时停止。"
                 : "只保活正在运行，不录制；关闭主窗口仍继续，锁屏或退出应用时停止。"
         }
         if busy || selectionActive || editingReviewVideo != nil { return "请先结束当前操作，再启动只保活。" }
         if keepAliveTarget == nil { return "首次使用或重开应用后，点击「只保活」选择原神标签页所在窗口，选好即开始；不需要识别对局。" }
         if keepAliveTarget?.usesDocumentBinding == true {
-            return "已绑定 Safari 当前云原神页面，不要求显示单标签栏；页面身份改变后停止并需重选。定期切回窗口，不录制；关闭主窗口仍继续，锁屏或退出时停止。"
+            return "已绑定当前云原神页面；切换标签或刷新页面会停止并需重选。定期切回窗口，不录制；关闭主窗口仍继续，锁屏或退出时停止。"
         }
         return "只保活会定期切回已校准的游戏标签页，不录制；关闭主窗口仍继续，锁屏或退出应用时停止。"
     }
@@ -1069,7 +1069,9 @@ final class AppModel: ObservableObject {
                 self.sessionRunning = true; self.keepAliveCount = 0; self.elapsed = 0; self.startedAt = Date()
                 self.mainWindow?.orderOut(nil)
                 if self.settings.showHUD { self.hud.show(model: self, displayID: try target.currentWindow().region().displayID) }
-                self.status = "只保活：每 \(Int(self.settings.keepAliveSeconds)) 秒切回已校准页面，不录制、不点击游戏"
+                self.status = target.usesDocumentBinding
+                    ? "只保活：每 \(Int(self.settings.keepAliveSeconds)) 秒恢复游戏窗口；切换标签或刷新后停止"
+                    : "只保活：每 \(Int(self.settings.keepAliveSeconds)) 秒切回已校准页面，不录制、不点击游戏"
                 var schedule = KeepAliveSchedule(interval: self.settings.keepAliveSeconds)
                 defer { schedule.stop() }
                 // First pulse is immediate; later pulses use the same cancellable task.

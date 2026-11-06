@@ -252,7 +252,7 @@ struct MainView: View {
                         } else {
                             Button(action: model.startKeepAlive) { Label("只保活", systemImage: "cursorarrow.motionlines") }
                                 .disabled(!model.canKeepAlive)
-                                .help("按保活间隔切回校准的窗口和标签页，仅移动鼠标，不点击游戏、不录制；锁屏后停止。")
+                                .help("按保活间隔恢复游戏窗口并移动鼠标，不点击、不录制。若只能绑定当前页面，切换标签或刷新会停止；锁屏后停止。")
                         }
                     }
                     controlNote(model.keepAliveAvailabilityNote)

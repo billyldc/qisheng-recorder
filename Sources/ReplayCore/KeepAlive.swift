@@ -6,7 +6,7 @@ public enum BrowserKeepAliveBinding: Equatable {
     public static func resolve(selections: [Bool?], hasUniqueOfficialDocument: Bool) -> Self? {
         let selected = selections.indices.filter { selections[$0] == true }
         if selected.count == 1 { return .tab(selected[0]) }
-        guard selected.isEmpty, selections.count <= 1, hasUniqueOfficialDocument else { return nil }
+        guard selected.isEmpty, hasUniqueOfficialDocument else { return nil }
         return .officialDocument
     }
 }

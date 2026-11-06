@@ -16,7 +16,7 @@ final class KeepAliveTarget {
         windowID = window.id; ownerPID = window.ownerPID; self.bundleID = bundleID
         let tabs = try window.browserTabs()
         if ["com.google.Chrome", "com.apple.Safari"].contains(bundleID) {
-            let page = bundleID == SafariLauncher.bundleID ? SafariLauncher.cloudDocumentForKeepAlive(window) : nil
+            let page = SafariLauncher.cloudDocumentForKeepAlive(window)
             guard let binding = BrowserKeepAliveBinding.resolve(selections: tabs.map(Self.selection), hasUniqueOfficialDocument: page != nil) else {
                 throw RecorderError.message("未能确认保活标签页或当前官方云原神页面。请切到原神；多标签时显示标签栏后重选，无需新增浏览器权限。")
             }

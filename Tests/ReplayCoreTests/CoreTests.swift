@@ -111,7 +111,9 @@ final class CoreTests {
         XCTAssertEqual(BrowserKeepAliveBinding.resolve(selections: [false], hasUniqueOfficialDocument: true), .officialDocument)
         XCTAssertEqual(BrowserKeepAliveBinding.resolve(selections: [false, true], hasUniqueOfficialDocument: false), .tab(1))
         XCTAssertNil(BrowserKeepAliveBinding.resolve(selections: [], hasUniqueOfficialDocument: false))
-        XCTAssertNil(BrowserKeepAliveBinding.resolve(selections: [nil, nil], hasUniqueOfficialDocument: true))
+        XCTAssertEqual(BrowserKeepAliveBinding.resolve(selections: [nil, nil], hasUniqueOfficialDocument: true), .officialDocument)
+        XCTAssertEqual(BrowserKeepAliveBinding.resolve(selections: [false, false], hasUniqueOfficialDocument: true), .officialDocument)
+        XCTAssertNil(BrowserKeepAliveBinding.resolve(selections: [nil, nil], hasUniqueOfficialDocument: false))
         XCTAssertNil(BrowserKeepAliveBinding.resolve(selections: [true, true], hasUniqueOfficialDocument: true))
     }
     func testPlaybackRecoveryNeverBlindlyToggles() throws {
