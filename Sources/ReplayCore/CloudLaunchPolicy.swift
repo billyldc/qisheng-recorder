@@ -78,6 +78,13 @@ public enum CloudLaunchPolicy {
         return b
     }
 
+    public static func confirmedPrincePrompt(_ first: [TextLine], _ second: [TextLine]) -> UnitPoint? {
+        guard state(first) == .prince, state(second) == .prince,
+              let a = navigationPoint(first), let b = navigationPoint(second),
+              abs(a.x - b.x) < 0.025, abs(a.y - b.y) < 0.025 else { return nil }
+        return b
+    }
+
     public static func recentTabKeyPoint(_ lines: [TextLine]) -> UnitPoint? {
         guard state(lines) == .recentReplays else { return nil }
         let headings = lines.filter { $0.x < 0.5 && $0.y < 0.45 }

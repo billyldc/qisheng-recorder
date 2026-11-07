@@ -175,7 +175,7 @@ public struct ReplayPlayerHeaders: Equatable {
                 // Match the two known names directly: animation and OCR can hide
                 // or corrupt the small action-status text below them.
                 let matches = left.filter {
-                    (top ? (0.04...0.4).contains($0.y) : (0.65...0.98).contains($0.y)) &&
+                    (top ? (0.015...0.4).contains($0.y) : (0.65...0.98).contains($0.y)) &&
                         [reference.top, reference.bottom].contains(normalized($0.text))
                 }
                 guard matches.count == 1 else { return nil }

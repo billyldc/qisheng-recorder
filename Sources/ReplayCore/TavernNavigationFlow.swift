@@ -25,6 +25,11 @@ public struct TavernNavigationFlow {
     public var needsWorldEvidence: Bool { stage == .world || stage == .map || stage == .arrival }
     public mutating func resetEvidence() { lastSample = nil }
 
+    public mutating func pageChanged(from previous: Self, inputSent: Bool) {
+        if !inputSent { self = previous }
+        resetEvidence()
+    }
+
     private mutating func stable(_ point: UnitPoint?, at now: Double) -> Bool {
         guard let point else { lastSample = nil; return false }
         defer { lastSample = (point, now) }

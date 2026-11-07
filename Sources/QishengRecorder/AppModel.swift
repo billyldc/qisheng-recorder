@@ -3,6 +3,8 @@ import ApplicationServices
 import AVFoundation
 import ReplayCore
 
+private struct NavigationPageChanged: Error {}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var settings = Settings.load() { didSet { if persistent { settings.save() } } }
@@ -908,7 +910,7 @@ final class AppModel: ObservableObject {
         var flow = TavernNavigationFlow(at: ProcessInfo.processInfo.systemUptime)
         var currentRegion = region
         var pageBounds = page
-        var forwardAttempts = 0
+        var pageChanges = 0
         let deadline = ProcessInfo.processInfo.systemUptime + 240
         while ProcessInfo.processInfo.systemUptime < deadline {
             try Task.checkCancellation()
@@ -927,12 +929,19 @@ final class AppModel: ObservableObject {
             }
             func validatePage() throws {
                 guard let live = SafariLauncher.cloudContentRect(window), GameViewport.samePageBounds(pageBounds, live) else {
-                    throw RecorderError.message("浏览器游戏区域在输入前发生变化，已停止导航；请重新开始。")
+                    throw NavigationPageChanged()
                 }
             }
             let now = ProcessInfo.processInfo.systemUptime
-            if keepAlive.takeDue(at: now), try await sendPointerInput(UnitPoint(x: 0.78, y: 0.27), in: currentRegion, kind: .keepAlive, validate: validatePage) {
-                keepAliveCount += 1
+            do {
+                if keepAlive.takeDue(at: now), try await sendPointerInput(UnitPoint(x: 0.78, y: 0.27), in: currentRegion, kind: .keepAlive, validate: validatePage) {
+                    keepAliveCount += 1
+                }
+            } catch is NavigationPageChanged {
+                pageChanges += 1
+                guard pageChanges <= 6 else { throw RecorderError.message("浏览器游戏区域反复变化，已停止导航。") }
+                flow.resetEvidence()
+                continue
             }
             let current = try currentRegion.resolved()
             let image = try await recorder.screenshot(region: current)
@@ -948,15 +957,17 @@ final class AppModel: ObservableObject {
                 return (lines, zoom)
             }.value
             try Task.checkCancellation()
+            let previousFlow = flow
             let action = flow.observe(lines, width: image.width, height: image.height, zoom: zoom,
                                       at: ProcessInfo.processInfo.systemUptime)
+            var inputSent = false
+            do {
             switch action {
             case .wait:
                 break
             case .openMap, .retryMap, .forward:
                 let key: SafariLauncher.GameKey = action == .forward ? .forward : .map
-                if action == .forward { forwardAttempts += 1 }
-                let targeted = action == .retryMap || (action == .forward && forwardAttempts > 1)
+                let targeted = action == .retryMap
                 status = action == .retryMap ? "地图尚未打开，已确认仍在游戏画面，正在重试一次…"
                     : (action == .openMap ? "已确认游戏画面，正在打开地图…" : "已确认小王子在附近，正在靠近…")
                 try await hud.hideForClick()
@@ -967,7 +978,9 @@ final class AppModel: ObservableObject {
                     let position = RegionGeometry.screenPoint(UnitPoint(x: 0.5, y: 0.5), source: current.sourceRect,
                                                               displayOrigin: CGDisplayBounds(current.displayID).origin)
                     guard window.checkClick(position).allowed else { throw RecorderError.message("游戏窗口被遮挡，已停止地图导航。") }
-                    try await SafariLauncher.pressGameKey(key, in: window, delivery: targeted ? .process : .system) {
+                    try await SafariLauncher.pressGameKey(key, in: window, delivery: targeted ? .process : .system, didSendKeyDown: {
+                        inputSent = true
+                    }) {
                         try validatePage()
                         guard self.session.unlocked, try currentRegion.resolved().globalRect == current.globalRect else {
                             throw RecorderError.message("桌面或游戏窗口已改变，已停止地图导航。")
@@ -991,6 +1004,13 @@ final class AppModel: ObservableObject {
                 return
             case .stop(let message):
                 throw RecorderError.message(message)
+            }
+            } catch is NavigationPageChanged {
+                pageChanges += 1
+                guard pageChanges <= 6 else { throw RecorderError.message("浏览器游戏区域反复变化，已停止导航。") }
+                flow.pageChanged(from: previousFlow, inputSent: inputSent)
+                addLog(inputSent ? "游戏区域在按键后变化，重新取框并观察结果；不会立即重复按键。" : "游戏区域在输入前变化，重新取框并复核。")
+                continue
             }
             try await Task.sleep(for: .milliseconds(700))
         }
@@ -1055,6 +1075,7 @@ final class AppModel: ObservableObject {
                 var attemptedPasswordLogin = false
                 var attemptedMapNavigation = false
                 var nextWorldProbe = 0.0
+                var princeInteractionSentAt: Double?
                 while Date() < deadline {
                     try Task.checkCancellation()
                     guard self.session.unlocked else { throw RecorderError.message("桌面已锁定，启动已暂停。") }
@@ -1078,6 +1099,14 @@ final class AppModel: ObservableObject {
                         continue
                     case .stop:
                         throw RecorderError.message("小王子回放选项或后续页面未能稳定确认，已停止；没有再次按 F 或选择其他选项。请检查页面后继续。")
+                    }
+                    if state == .prince, let sentAt = princeInteractionSentAt {
+                        guard ProcessInfo.processInfo.systemUptime - sentAt < 15 else {
+                            throw RecorderError.message("已发送小王子对话按键，但未能确认后续界面；为避免误选，已停止。")
+                        }
+                        self.status = "已发送小王子对话按键，正在等待对话界面；不会重复按 F…"
+                        try await Task.sleep(for: .seconds(1))
+                        continue
                     }
                     if !navigationKeepAliveStarted && (![.login, .unknown, .disconnected].contains(state) || CloudLaunchPolicy.hasGameSession(lines)) {
                         navigationKeepAlive.start(at: ProcessInfo.processInfo.systemUptime)
@@ -1265,7 +1294,9 @@ final class AppModel: ObservableObject {
                                 let position = RegionGeometry.screenPoint(point, source: current.sourceRect, displayOrigin: CGDisplayBounds(current.displayID).origin)
                                 guard window.checkClick(position).allowed else { throw RecorderError.message("游戏快捷键的目标位置被遮挡，已停止。") }
                                 let key: SafariLauncher.GameKey = state == .recentReplays ? .favorites : .interact
-                                try await SafariLauncher.pressGameKey(key, in: window) {
+                                try await SafariLauncher.pressGameKey(key, in: window, didSendKeyDown: {
+                                    if state == .prince { princeInteractionSentAt = ProcessInfo.processInfo.systemUptime }
+                                }) {
                                     guard self.session.unlocked, try region.resolved().globalRect == current.globalRect else {
                                         throw RecorderError.message("桌面或游戏窗口已改变，已停止快捷键。")
                                     }
@@ -1284,8 +1315,8 @@ final class AppModel: ObservableObject {
                         self.status = "云原神正在加载或排队，最多等待 6 分钟；可随时停止。"
                     case .unknown:
                         let now = ProcessInfo.processInfo.systemUptime
-                        if !attemptedMapNavigation && now >= nextWorldProbe {
-                            nextWorldProbe = now + 12
+                        if now >= nextWorldProbe {
+                            nextWorldProbe = now + (attemptedMapNavigation ? 3 : 12)
                             if let page = SafariLauncher.cloudContentRect(window) {
                                 var candidate: (CaptureRegion, [TextLine])?
                                 do {
@@ -1307,7 +1338,56 @@ final class AppModel: ObservableObject {
                                 }
                                 guard let confirmed = SafariLauncher.cloudContentRect(window),
                                       GameViewport.samePageBounds(page, confirmed) else { continue }
-                                if let (gameRegion, gameLines) = candidate, TavernNavigationEvidence.worldVisible(gameLines) {
+                                if let (gameRegion, gameLines) = candidate, CloudLaunchPolicy.state(gameLines) == .prince {
+                                    if let sentAt = princeInteractionSentAt {
+                                        guard now - sentAt < 15 else {
+                                            throw RecorderError.message("已发送小王子对话按键，但未能确认后续界面；为避免误选，已停止。")
+                                        }
+                                        self.status = "已发送小王子对话按键，正在等待对话界面；不会重复按 F…"
+                                        continue
+                                    }
+                                    try await Task.sleep(for: .milliseconds(450))
+                                    let secondImage = try await self.recorder.screenshot(region: gameRegion.resolved())
+                                    let secondLines = try await Task.detached {
+                                        try Metadata.worldNavigationText(in: secondImage, arrival: true)
+                                    }.value
+                                    guard let point = CloudLaunchPolicy.confirmedPrincePrompt(gameLines, secondLines),
+                                          let live = SafariLauncher.cloudContentRect(window),
+                                          GameViewport.samePageBounds(confirmed, live) else { continue }
+                                    guard princeDialogueGuard.observe(.prince, at: ProcessInfo.processInfo.systemUptime) == .proceed else {
+                                        throw RecorderError.message("小王子对话状态不明确，尚未按 F。")
+                                    }
+                                    let current = try gameRegion.resolved()
+                                    let position = RegionGeometry.screenPoint(point, source: current.sourceRect,
+                                                                              displayOrigin: CGDisplayBounds(current.displayID).origin)
+                                    var sent = false
+                                    try await self.hud.hideForClick()
+                                    do {
+                                        try window.raise()
+                                        try await Task.sleep(for: .milliseconds(300))
+                                        guard window.checkClick(position).allowed else { throw RecorderError.message("小王子对话入口被遮挡，尚未按 F。") }
+                                        try await SafariLauncher.pressGameKey(.interact, in: window, didSendKeyDown: { sent = true }) {
+                                            guard self.session.unlocked, try gameRegion.resolved().globalRect == current.globalRect else {
+                                                throw RecorderError.message("桌面或游戏窗口已改变，已停止快捷键。")
+                                            }
+                                            guard let live = SafariLauncher.cloudContentRect(window), GameViewport.samePageBounds(confirmed, live) else {
+                                                throw NavigationPageChanged()
+                                            }
+                                        }
+                                    } catch is NavigationPageChanged {
+                                        self.hud.restore()
+                                        if sent { princeInteractionSentAt = ProcessInfo.processInfo.systemUptime }
+                                        nextWorldProbe = 0
+                                        continue
+                                    } catch { self.hud.restore(); throw error }
+                                    self.hud.restore()
+                                    princeInteractionSentAt = ProcessInfo.processInfo.systemUptime
+                                    actions[.prince, default: 0] += 1
+                                    self.status = "已确认小王子对话入口，正在等待对话界面…"
+                                    try await Task.sleep(for: .seconds(4))
+                                    continue
+                                }
+                                if !attemptedMapNavigation, let (gameRegion, gameLines) = candidate, TavernNavigationEvidence.worldVisible(gameLines) {
                                     attemptedMapNavigation = true
                                     self.status = "已确认游戏画面，准备前往猫尾酒馆…"
                                     try await self.navigateToTavern(window: window, region: gameRegion, page: confirmed, keepAlive: &navigationKeepAlive)

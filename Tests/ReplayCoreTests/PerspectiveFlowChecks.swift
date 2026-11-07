@@ -104,6 +104,11 @@ extension CoreTests {
         statuses[1].text = "正在等同："; statuses[3].text = "动画"
         precondition(ReplayPlayerHeaders.detect(statuses) == nil)
         precondition(ReplayPlayerHeaders.detect(statuses, matching: reference) == reference?.swapped)
+        var nearTop = statuses
+        nearTop[0].y = 0.0317
+        precondition(ReplayPlayerHeaders.detect(nearTop, matching: reference) == reference?.swapped)
+        nearTop[0].y = 0.01
+        precondition(ReplayPlayerHeaders.detect(nearTop, matching: reference) == nil)
         statuses.append(statuses[0])
         precondition(ReplayPlayerHeaders.detect(statuses, matching: reference) == nil)
         precondition(ReplayPlayerHeaders.detect(playerHeaders(.own, sameNames: true), matching: reference) == nil)

@@ -14,7 +14,7 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
     private var output: SCRecordingOutput?
     private var finished = false
     private var started = false
-    private var finalizing = false
+    private var lifecycle = CaptureLifecycle()
     private var failure: Error?
     private var health = CaptureHealth(at: 0)
     private var pendingCrop: (url: URL, normalized: CGRect)?
@@ -88,6 +88,7 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
         try capture.addStreamOutput(self, type: .screen, sampleHandlerQueue: .main)
         try capture.addRecordingOutput(recording)
         stream = capture; output = recording
+        lifecycle.beginCapture()
         do {
             try await capture.startCapture()
             for _ in 0..<150 {
@@ -100,15 +101,16 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
         } catch {
             try? await capture.stopCapture()
             stream = nil; output = nil
+            lifecycle.captureFailedToStart()
             throw error
         }
     }
 
     func stop() async throws {
         // A cancelled automation task must still allow real time for MP4 finalization.
+        lifecycle.beginFinalization()
         try await Task { @MainActor in
-            self.finalizing = true
-            defer { self.finalizing = false }
+            defer { self.lifecycle.finishFinalization() }
             try await self.finalize()
             if let pending = self.pendingCrop {
                 self.pendingCrop = nil
@@ -138,7 +140,7 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
     }
 
     func checkFailure() throws {
-        if finalizing { return }
+        if lifecycle.stoppingIntentionally { return }
         guard stream != nil else { throw RecorderError.message("录制流已丢失，已停止自动操作。") }
         if let failure { throw failure }
         if finished && stream != nil {

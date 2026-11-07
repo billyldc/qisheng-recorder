@@ -15,6 +15,9 @@ func checkTavernNavigation() throws {
     let panel = [uid, line("猫尾酒馆", 0.78, 0.02, 0.06), line("蒙德 蒙德城", 0.76, 0.10, 0.1), line("传送至猫尾酒馆", 0.83, 0.92, 0.11)]
     let nearby = world + [line("小王子", 0.47, 0.19), line("猫之牌圣", 0.47, 0.22)]
     let prompt = [uid, line("F", 0.55, 0.58), line("小王子", 0.61, 0.58)]
+    precondition(CloudLaunchPolicy.confirmedPrincePrompt(prompt, prompt) != nil)
+    precondition(CloudLaunchPolicy.confirmedPrincePrompt(prompt, prompt + [line("观看一下对局回放", 0.65, 0.60, 0.2)]) == nil)
+    precondition(CloudLaunchPolicy.confirmedPrincePrompt(prompt, [uid, line("F", 0.65, 0.58), line("小王子", 0.71, 0.58)]) == nil)
     let zoom = UnitPoint(x: 0.025, y: 0.411)
     let disconnected = [line("连接中断", 0.4, 0.4), line("退出游戏", 0.4, 0.6, 0.2)]
     precondition(CloudLaunchPolicy.confirmedDisconnectExit(disconnected, disconnected) != nil)
@@ -142,6 +145,23 @@ func checkTavernNavigation() throws {
     precondition(retryObserve(world, 12) == .wait && retryObserve(world, 13) == .wait)
     precondition(retryObserve(layer, 14) == .wait)
     guard case .click(_, .mapLayers) = retryObserve(layer, 15) else { preconditionFailure("map after retry") }
+    var changedAfterKey = TavernNavigationFlow(at: 0)
+    precondition(changedAfterKey.observe(world, width: 1324, height: 752, zoom: nil, at: 0) == .wait)
+    let beforeMap = changedAfterKey
+    precondition(changedAfterKey.observe(world, width: 1324, height: 752, zoom: nil, at: 1) == .openMap)
+    changedAfterKey.pageChanged(from: beforeMap, inputSent: true)
+    precondition(changedAfterKey.observe(layer, width: 1324, height: 752, zoom: nil, at: 2) == .wait)
+    guard case .click(_, .mapLayers) = changedAfterKey.observe(layer, width: 1324, height: 752, zoom: nil, at: 3) else {
+        preconditionFailure("sent map key must advance without repeating it")
+    }
+    var changedBeforeKey = TavernNavigationFlow(at: 0)
+    precondition(changedBeforeKey.observe(world, width: 1324, height: 752, zoom: nil, at: 0) == .wait)
+    let beforeUnsentMap = changedBeforeKey
+    precondition(changedBeforeKey.observe(world, width: 1324, height: 752, zoom: nil, at: 1) == .openMap)
+    changedBeforeKey.pageChanged(from: beforeUnsentMap, inputSent: false)
+    precondition(changedBeforeKey.observe(layer, width: 1324, height: 752, zoom: nil, at: 2) == .wait)
+    precondition(changedBeforeKey.observe(world, width: 1324, height: 752, zoom: nil, at: 3) == .wait)
+    precondition(changedBeforeKey.observe(world, width: 1324, height: 752, zoom: nil, at: 4) == .openMap)
     let page = CGRect(x: 0, y: 90, width: 1324, height: 820)
     precondition(GameViewport.samePageBounds(page, page.offsetBy(dx: 0.5, dy: 0.5)))
     precondition(!GameViewport.samePageBounds(page, page.offsetBy(dx: 0, dy: 30)))

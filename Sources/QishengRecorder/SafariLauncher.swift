@@ -97,6 +97,7 @@ enum SafariLauncher {
 
     static func pressGameKey(_ key: GameKey, in window: CaptureWindow,
                              delivery: GameKeyDelivery = .system,
+                             didSendKeyDown: @MainActor () -> Void = {},
                              validateSession: @MainActor () throws -> Void) async throws {
         let root = try window.accessibilityWindow()
         let app = AXUIElementCreateApplication(window.ownerPID)
@@ -145,6 +146,7 @@ enum SafariLauncher {
             }
         }
         post(events[0])
+        didSendKeyDown()
         // Always release a posted key even when cancellation or focus change occurs mid-key.
         try? await Task.sleep(for: .milliseconds(key == .forward ? 650 : 180))
         post(events[1])

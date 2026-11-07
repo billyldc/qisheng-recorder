@@ -1,5 +1,16 @@
 import Foundation
 
+public struct CaptureLifecycle {
+    private enum Phase { case idle, capturing, finalizing, finished }
+    private var phase: Phase = .idle
+    public init() {}
+    public var stoppingIntentionally: Bool { phase == .finalizing || phase == .finished }
+    public mutating func beginCapture() { phase = .capturing }
+    public mutating func captureFailedToStart() { phase = .idle }
+    public mutating func beginFinalization() { phase = .finalizing }
+    public mutating func finishFinalization() { phase = .finished }
+}
+
 /// A start callback is not proof that frames and encoded output keep arriving.
 public struct CaptureHealth {
     public enum Frame { case complete, idle, unavailable }

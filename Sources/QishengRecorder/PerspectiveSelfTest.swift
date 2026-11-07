@@ -45,7 +45,13 @@ private struct PerspectiveFixtureSequence: Decodable {
     var desired: ReplayPerspective
     var requireFinished: Bool
     var referenceImage: String?
+    var referenceFavorites: FavoriteReference?
     var frames: [Frame]
+    struct FavoriteReference: Decodable {
+        var lines: [TextLine]
+        var date: String
+        var play: ReplayCore.UnitPoint
+    }
     struct Frame: Decodable {
         var image: String
         var at: Double
@@ -68,6 +74,11 @@ private func checkPerspectiveSequence(at url: URL, resources: URL) throws {
         guard let image = NSImage(contentsOfFile: path)?.cgImage(forProposedRect: nil, context: nil, hints: nil),
               let headers = ReplayPlayerHeaders.detect(try Metadata.text(in: image)) else {
             throw RecorderError.message("Cannot read the fixture's known own-view reference")
+        }
+        reference = headers
+    } else if let fixtureReference = fixture.referenceFavorites {
+        guard let headers = ReplayPlayerHeaders.fromFavorites(fixtureReference.lines, date: fixtureReference.date, play: fixtureReference.play) else {
+            throw RecorderError.message("Cannot read the fixture's favorites orientation reference")
         }
         reference = headers
     }
