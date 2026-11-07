@@ -1046,8 +1046,7 @@ final class AppModel: ObservableObject {
                 var navigationKeepAliveStarted = false
                 var lastPrinceEvidence = ""
                 var princeDiagnosticCount = 0
-                var princeChoicesSeen = false
-                var unconfirmedPrinceChoices = 0
+                var princeDialogueGuard = PrinceDialogueGuard()
                 defer { navigationKeepAlive.stop() }
                 var switchedPasswordTab = false
                 var attemptedPasswordLogin = false
@@ -1062,15 +1061,19 @@ final class AppModel: ObservableObject {
                     let lines = try await Task.detached { try Metadata.cloudNavigationText(in: image) }.value
                     try Task.checkCancellation()
                     let state = CloudLaunchPolicy.state(lines)
-                    if state == .princeDialogue { princeChoicesSeen = true }
-                    if princeChoicesSeen && [.prince, .princeGreeting, .unknown].contains(state) {
-                        unconfirmedPrinceChoices += 1
-                        guard unconfirmedPrinceChoices <= 3 else {
-                            throw RecorderError.message("小王子选项出现后无法稳定确认回放按钮，已停止；没有再次按 F 或选择其他选项。请检查页面后继续。")
-                        }
+                    switch princeDialogueGuard.observe(state, at: ProcessInfo.processInfo.systemUptime) {
+                    case .proceed:
+                        break
+                    case .waitForChoice:
                         self.status = "已看到小王子选项，正在重新确认回放按钮；不会再次按 F…"
                         try await Task.sleep(for: .seconds(1))
                         continue
+                    case .waitForReplay:
+                        self.status = "已点击回放选项，正在等待对局列表；不会再次按 F…"
+                        try await Task.sleep(for: .seconds(1))
+                        continue
+                    case .stop:
+                        throw RecorderError.message("小王子回放选项或后续页面未能稳定确认，已停止；没有再次按 F 或选择其他选项。请检查页面后继续。")
                     }
                     if !navigationKeepAliveStarted && (![.login, .unknown, .disconnected].contains(state) || CloudLaunchPolicy.hasGameSession(lines)) {
                         navigationKeepAlive.start(at: ProcessInfo.processInfo.systemUptime)
@@ -1201,7 +1204,7 @@ final class AppModel: ObservableObject {
                         return
                     case .princeDialogue:
                         let count = actions[state, default: 0]
-                        guard count < 3, unconfirmedPrinceChoices < 3 else {
+                        guard count < 3, princeDialogueGuard.unconfirmedChoices < 3 else {
                             throw RecorderError.message("未能稳定确认小王子的回放选项，已停止；没有按 F、滚动盲选或开始录制。请检查页面后继续。")
                         }
                         self.status = "已进入小王子选项，正在复核“观看一下对局回放”…"
@@ -1209,9 +1212,13 @@ final class AppModel: ObservableObject {
                         let secondImage = try await self.recorder.screenshot(region: region.resolved())
                         let secondLines = try await Task.detached { try Metadata.cloudNavigationText(in: secondImage) }.value
                         try Task.checkCancellation()
-                        if [.recentReplays, .favorites].contains(CloudLaunchPolicy.state(secondLines)) { continue }
+                        let secondState = CloudLaunchPolicy.state(secondLines)
+                        if [.recentReplays, .favorites].contains(secondState) {
+                            _ = princeDialogueGuard.observe(secondState, at: ProcessInfo.processInfo.systemUptime)
+                            continue
+                        }
                         guard let point = CloudLaunchPolicy.confirmedPrinceReplayPoint(lines, secondLines) else {
-                            unconfirmedPrinceChoices += 1
+                            princeDialogueGuard.confirmationFailed()
                             self.status = "小王子选项已出现，回放按钮仍待确认；正在放大重读，不按 F…"
                             continue
                         }
@@ -1222,7 +1229,7 @@ final class AppModel: ObservableObject {
                         } catch { self.hud.restore(); throw error }
                         self.hud.restore()
                         actions[state] = count + 1
-                        unconfirmedPrinceChoices = 0
+                        princeDialogueGuard.replayClickSent(at: ProcessInfo.processInfo.systemUptime)
                         try await Task.sleep(for: .seconds(4))
                     case .launcher, .gameEntry, .prince, .princeGreeting, .recentReplays, .replayEnd:
                         let count = actions[state, default: 0]

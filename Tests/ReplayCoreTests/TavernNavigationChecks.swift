@@ -44,6 +44,38 @@ func checkTavernNavigation() throws {
     precondition(TavernNavigationEvidence.teleportPoint(panel.filter { !$0.text.contains("蒙德城") }) == nil)
     precondition(TavernNavigationEvidence.teleportPoint(panel + [line("验证码", 0.5, 0.5)]) == nil)
 
+    var dialogue = PrinceDialogueGuard()
+    precondition(dialogue.observe(.unknown, at: 0) == .proceed)
+    precondition(dialogue.observe(.princeDialogue, at: 1) == .proceed)
+    for time in 2...4 { precondition(dialogue.observe(.unknown, at: Double(time)) == .waitForChoice) }
+    precondition(dialogue.observe(.prince, at: 5) == .stop)
+    dialogue = PrinceDialogueGuard()
+    precondition(dialogue.observe(.princeDialogue, at: 10) == .proceed)
+    dialogue.confirmationFailed()
+    precondition(dialogue.unconfirmedChoices == 1)
+    dialogue.replayClickSent(at: 11)
+    for time in 12...36 { precondition(dialogue.observe(.unknown, at: Double(time)) == .waitForReplay) }
+    precondition(dialogue.observe(.unknown, at: 37) == .stop)
+    dialogue = PrinceDialogueGuard()
+    precondition(dialogue.observe(.princeDialogue, at: 10) == .proceed)
+    dialogue.replayClickSent(at: 11)
+    precondition(dialogue.observe(.loading, at: 30) == .proceed)
+    precondition(dialogue.observe(.unknown, at: 54) == .waitForReplay)
+    precondition(dialogue.observe(.recentReplays, at: 55) == .proceed)
+    precondition(dialogue.observe(.unknown, at: 56) == .proceed)
+    precondition(dialogue.observe(.prince, at: 57) == .proceed)
+    dialogue = PrinceDialogueGuard()
+    precondition(dialogue.observe(.princeDialogue, at: 1) == .proceed)
+    precondition(dialogue.observe(.favorites, at: 2) == .proceed)
+    precondition(dialogue.observe(.unknown, at: 3) == .proceed)
+    precondition(dialogue.observe(.login, at: 4) == .proceed)
+    dialogue = PrinceDialogueGuard()
+    precondition(dialogue.observe(.princeDialogue, at: 10) == .proceed)
+    dialogue.replayClickSent(at: 11)
+    for time in 12...14 { precondition(dialogue.observe(.princeGreeting, at: Double(time)) == .waitForChoice) }
+    precondition(dialogue.observe(.prince, at: 15) == .stop)
+    precondition(dialogue.observe(.unknown, at: .nan) == .stop)
+
     var flow = TavernNavigationFlow(at: 0)
     func observe(_ lines: [TextLine], _ time: Double, _ icon: UnitPoint? = nil) -> TavernNavigationFlow.Action {
         flow.observe(lines, width: 1324, height: 752, zoom: icon, at: time)
@@ -106,5 +138,5 @@ func checkTavernNavigation() throws {
         precondition(abs(point.x - 0.025) < 0.008 && abs(point.y - 0.411) < 0.008)
         print("PASS: private map zoom-control image")
     }
-    print("PASS: tavern navigation evidence, sequential confirmation, bounded movement and timeout")
+    print("PASS: tavern navigation, dialogue transition guard, bounded movement and timeout")
 }
