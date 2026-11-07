@@ -9,10 +9,11 @@ func runTavernSelfTest() {
         guard let index = args.firstIndex(of: "--tavern-self-test"), args.count == index + 3,
               let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: args[index + 1]) as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw RecorderError.message("Invalid fixture arguments") }
-        let lines = try ["worldFull", "princePrompt"].contains(args[index + 2]) ? Metadata.cloudNavigationText(in: image) : Metadata.text(in: image)
+        let lines = try ["worldFull", "worldArrival", "princePrompt"].contains(args[index + 2]) ? Metadata.cloudNavigationText(in: image) : Metadata.text(in: image)
         let result: Bool
         switch args[index + 2] {
         case "world": result = TavernNavigationEvidence.worldVisible(lines) && TavernNavigationEvidence.princeNearby(lines)
+        case "worldArrival": result = TavernNavigationEvidence.princeNearby(lines)
         case "worldFull": result = TavernNavigationEvidence.worldVisible(lines)
         case "princePrompt": result = CloudLaunchPolicy.state(lines) == .prince
         case "regions": result = TavernNavigationEvidence.regionPoint(lines) != nil
