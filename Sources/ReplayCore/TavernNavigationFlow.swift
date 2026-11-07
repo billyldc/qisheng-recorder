@@ -5,7 +5,7 @@ public struct TavernNavigationFlow {
         case mapLayers, mondstadt, zoom, iconCluster, tavernCandidate, teleport
     }
     public enum Action: Equatable {
-        case wait, openMap, click(UnitPoint, ClickKind), forward, arrived, stop(String)
+        case wait, openMap, retryMap, click(UnitPoint, ClickKind), forward, arrived, stop(String)
     }
     private enum Stage {
         case world, map, regions, zoom, cluster, candidate, panel, arrival, done
@@ -17,10 +17,12 @@ public struct TavernNavigationFlow {
     private var lastAction = -Double.infinity
     private var zooms = 0
     private var steps = 0
+    private var mapRetries = 0
 
     public init(at now: Double) { stageStarted = now }
     public var checkingArrival: Bool { stage == .arrival }
     public var needsZoomControl: Bool { stage == .zoom || stage == .cluster }
+    public mutating func resetEvidence() { lastSample = nil }
 
     private mutating func stable(_ point: UnitPoint?, at now: Double) -> Bool {
         guard let point else { lastSample = nil; return false }
@@ -41,14 +43,26 @@ public struct TavernNavigationFlow {
         guard now - stageStarted <= limit else { return .stop("未能确认地图导航的下一步，已停止；请检查游戏画面。") }
         switch stage {
         case .world:
-            guard stable(TavernNavigationEvidence.worldVisible(lines) ? UnitPoint(x: 0.5, y: 0.5) : nil, at: now) else { return .wait }
+            let nearby = TavernNavigationEvidence.princeNearby(lines)
+            let candidate = nearby ? UnitPoint(x: 0.3, y: 0.3)
+                : (TavernNavigationEvidence.worldVisible(lines) ? UnitPoint(x: 0.5, y: 0.5) : nil)
+            guard stable(candidate, at: now) else { return .wait }
+            if nearby {
+                advance(.arrival, at: now)
+                return .wait
+            }
             advance(.map, at: now)
             return .openMap
         case .map:
-            let candidate = TavernNavigationEvidence.layerPoint(lines)
-            guard stable(candidate, at: now), let point = candidate else { return .wait }
-            advance(.regions, at: now)
-            return .click(point, .mapLayers)
+            if let point = TavernNavigationEvidence.layerPoint(lines) {
+                guard stable(point, at: now) else { return .wait }
+                advance(.regions, at: now)
+                return .click(point, .mapLayers)
+            }
+            let stillInWorld = now - lastAction >= 4 && mapRetries == 0 && TavernNavigationEvidence.worldVisible(lines)
+            guard stable(stillInWorld ? UnitPoint(x: 0.5, y: 0.5) : nil, at: now) else { return .wait }
+            mapRetries += 1; lastAction = now; lastSample = nil
+            return .retryMap
         case .regions:
             let candidate = TavernNavigationEvidence.regionPoint(lines)
             guard stable(candidate, at: now), let point = candidate else { return .wait }

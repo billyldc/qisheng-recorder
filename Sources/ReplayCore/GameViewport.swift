@@ -63,6 +63,15 @@ public enum GameViewport {
         return result
     }
 
+    public static func samePageBounds(_ first: CGRect, _ second: CGRect) -> Bool {
+        let values = [first.minX, first.minY, first.width, first.height,
+                      second.minX, second.minY, second.width, second.height]
+        guard values.allSatisfy(\.isFinite), first.width > 0, first.height > 0,
+              second.width > 0, second.height > 0 else { return false }
+        return abs(first.minX - second.minX) <= 1 && abs(first.minY - second.minY) <= 1 &&
+            abs(first.width - second.width) <= 1 && abs(first.height - second.height) <= 1
+    }
+
     public static func pointRect(pixelRect: CGRect, imageSize: CGSize, source: CGRect) -> CGRect {
         CGRect(x: source.minX + pixelRect.minX / imageSize.width * source.width,
                y: source.minY + pixelRect.minY / imageSize.height * source.height,

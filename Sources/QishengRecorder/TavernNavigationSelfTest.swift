@@ -58,7 +58,9 @@ func runTavernFlowSelfTest() {
         func require(_ condition: @autoclosure () -> Bool) throws {
             guard condition() else { throw RecorderError.message("Tavern flow fixture did not match") }
         }
-        try require(observe(0, 0) == .wait && observe(0, 1) == .openMap)
+        let away = texts[0].filter { !$0.text.contains("小王子") && !$0.text.contains("猫之牌圣") }
+        try require(flow.observe(away, width: images[0].width, height: images[0].height, zoom: nil, at: 0) == .wait &&
+                    flow.observe(away, width: images[0].width, height: images[0].height, zoom: nil, at: 1) == .openMap)
         try require(observe(2, 2) == .wait)
         if case .click(_, .mapLayers) = observe(2, 3) {} else { throw RecorderError.message("Map layer fixture did not match") }
         try require(observe(1, 4) == .wait)
@@ -77,6 +79,13 @@ func runTavernFlowSelfTest() {
         if case .click(_, .teleport) = observe(5, 27) {} else { throw RecorderError.message("Teleport fixture did not match") }
         try require(observe(0, 30) == .wait && observe(0, 31) == .forward)
         try require(observe(6, 32) == .wait && observe(6, 33) == .arrived)
+        var nearby = TavernNavigationFlow(at: 0)
+        func near(_ position: Int, _ time: Double) -> TavernNavigationFlow.Action {
+            nearby.observe(texts[position], width: images[position].width, height: images[position].height, zoom: nil, at: time)
+        }
+        try require(near(0, 0) == .wait && near(0, 1) == .wait)
+        try require(near(0, 4) == .wait && near(0, 5) == .forward)
+        try require(near(6, 6) == .wait && near(6, 7) == .arrived)
         print("PASS: reordered repeated private tavern screenshots through production OCR and navigation flow; no input sent")
         NSApp.terminate(nil)
     } catch {

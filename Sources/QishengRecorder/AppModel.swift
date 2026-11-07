@@ -404,7 +404,9 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    private func sendPointerInput(_ point: UnitPoint, in region: CaptureRegion, kind: PointerInput = .click, clickHoldMilliseconds: Int = 80) async throws -> Bool {
+    private func sendPointerInput(_ point: UnitPoint, in region: CaptureRegion, kind: PointerInput = .click,
+                                  clickHoldMilliseconds: Int = 80,
+                                  validate: @MainActor () throws -> Void = {}) async throws -> Bool {
         try Task.checkCancellation()
         guard AXIsProcessTrusted() else { throw RecorderError.message("辅助功能权限已关闭，录制已停止。") }
         guard session.unlocked else { throw RecorderError.message("桌面已锁定，已停止自动点击。") }
@@ -441,6 +443,7 @@ final class AppModel: ObservableObject {
             check = window.checkClick(events[0].location)
         }
         try Task.checkCancellation()
+        try validate()
         guard session.unlocked, try region.resolved().globalRect == region.globalRect else {
             throw RecorderError.message("桌面或录制区域已改变，已停止自动输入。")
         }
@@ -454,6 +457,7 @@ final class AppModel: ObservableObject {
         events[0].post(tap: .cghidEventTap)
         try await Task.sleep(for: .milliseconds(100))
         try Task.checkCancellation()
+        try validate()
         check = window.checkClick(position)
         guard session.unlocked, try region.resolved().globalRect == region.globalRect else {
             throw RecorderError.message("鼠标移动期间桌面或录制区域已改变，已停止自动输入。")
@@ -899,20 +903,38 @@ final class AppModel: ObservableObject {
         else { startBatch() }
     }
 
-    private func navigateToTavern(window: CaptureWindow, region: CaptureRegion,
+    private func navigateToTavern(window: CaptureWindow, region: CaptureRegion, page: CGRect,
                                   keepAlive: inout KeepAliveSchedule) async throws {
         var flow = TavernNavigationFlow(at: ProcessInfo.processInfo.systemUptime)
+        var currentRegion = region
+        var pageBounds = page
+        var forwardAttempts = 0
         let deadline = ProcessInfo.processInfo.systemUptime + 240
         while ProcessInfo.processInfo.systemUptime < deadline {
             try Task.checkCancellation()
             guard session.unlocked, SafariLauncher.pageURL(window).map(CloudLaunchPolicy.allowed) == true else {
                 throw RecorderError.message("桌面锁定或已离开云原神，地图导航已停止。")
             }
+            guard let livePage = SafariLauncher.cloudContentRect(window) else {
+                throw RecorderError.message("浏览器游戏区域不可用，已停止地图导航。")
+            }
+            if !GameViewport.samePageBounds(pageBounds, livePage) {
+                status = "浏览器游戏区域发生变化，正在重新确认画面边界…"
+                let refreshed = try await GameCaptureRegion.prepare(try window.region(), recorder: recorder)
+                guard let confirmed = SafariLauncher.cloudContentRect(window),
+                      GameViewport.samePageBounds(livePage, confirmed) else { continue }
+                currentRegion = refreshed; pageBounds = confirmed; flow.resetEvidence()
+            }
+            func validatePage() throws {
+                guard let live = SafariLauncher.cloudContentRect(window), GameViewport.samePageBounds(pageBounds, live) else {
+                    throw RecorderError.message("浏览器游戏区域在输入前发生变化，已停止导航；请重新开始。")
+                }
+            }
             let now = ProcessInfo.processInfo.systemUptime
-            if keepAlive.takeDue(at: now), try await sendPointerInput(UnitPoint(x: 0.78, y: 0.27), in: region, kind: .keepAlive) {
+            if keepAlive.takeDue(at: now), try await sendPointerInput(UnitPoint(x: 0.78, y: 0.27), in: currentRegion, kind: .keepAlive, validate: validatePage) {
                 keepAliveCount += 1
             }
-            let current = try region.resolved()
+            let current = try currentRegion.resolved()
             let image = try await recorder.screenshot(region: current)
             let checkingArrival = flow.checkingArrival, needsZoom = flow.needsZoomControl
             let (lines, zoom) = try await Task.detached {
@@ -928,18 +950,23 @@ final class AppModel: ObservableObject {
             switch action {
             case .wait:
                 break
-            case .openMap, .forward:
-                let key: SafariLauncher.GameKey = action == .openMap ? .map : .forward
-                status = action == .openMap ? "已确认游戏画面，正在打开地图…" : "已确认到达猫尾酒馆，正在靠近小王子…"
+            case .openMap, .retryMap, .forward:
+                let key: SafariLauncher.GameKey = action == .forward ? .forward : .map
+                if action == .forward { forwardAttempts += 1 }
+                let targeted = action == .retryMap || (action == .forward && forwardAttempts > 1)
+                status = action == .retryMap ? "地图尚未打开，已确认仍在游戏画面，正在重试一次…"
+                    : (action == .openMap ? "已确认游戏画面，正在打开地图…" : "已确认小王子在附近，正在靠近…")
                 try await hud.hideForClick()
                 do {
                     try window.raise()
                     try await Task.sleep(for: .milliseconds(300))
+                    try validatePage()
                     let position = RegionGeometry.screenPoint(UnitPoint(x: 0.5, y: 0.5), source: current.sourceRect,
                                                               displayOrigin: CGDisplayBounds(current.displayID).origin)
                     guard window.checkClick(position).allowed else { throw RecorderError.message("游戏窗口被遮挡，已停止地图导航。") }
-                    try await SafariLauncher.pressGameKey(key, in: window) {
-                        guard self.session.unlocked, try region.resolved().globalRect == current.globalRect else {
+                    try await SafariLauncher.pressGameKey(key, in: window, delivery: targeted ? .process : .system) {
+                        try validatePage()
+                        guard self.session.unlocked, try currentRegion.resolved().globalRect == current.globalRect else {
                             throw RecorderError.message("桌面或游戏窗口已改变，已停止地图导航。")
                         }
                     }
@@ -955,7 +982,7 @@ final class AppModel: ObservableObject {
                 case .teleport: status = "已确认蒙德猫尾酒馆传送按钮，正在传送…"
                 }
                 if kind != .zoom { addLog(status) }
-                try await sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
+                try await sendPointerInput(point, in: currentRegion, clickHoldMilliseconds: 250, validate: validatePage)
             case .arrived:
                 addLog("已确认小王子的 F 对话入口，继续启动回放。")
                 return
@@ -1248,8 +1275,15 @@ final class AppModel: ObservableObject {
                         if !attemptedMapNavigation && TavernNavigationEvidence.worldVisible(lines) {
                             attemptedMapNavigation = true
                             self.status = "正在确认游戏画面边界，准备前往猫尾酒馆…"
+                            guard let page = SafariLauncher.cloudContentRect(window) else {
+                                throw RecorderError.message("未能确认浏览器内的游戏区域，已停止导航。")
+                            }
                             let gameRegion = try await GameCaptureRegion.prepare(region, recorder: self.recorder)
-                            try await self.navigateToTavern(window: window, region: gameRegion, keepAlive: &navigationKeepAlive)
+                            guard let confirmed = SafariLauncher.cloudContentRect(window), GameViewport.samePageBounds(page, confirmed) else {
+                                attemptedMapNavigation = false
+                                continue
+                            }
+                            try await self.navigateToTavern(window: window, region: gameRegion, page: confirmed, keepAlive: &navigationKeepAlive)
                             continue
                         }
                         // Narrow local diagnostics: never dump login OCR or whole-page text.

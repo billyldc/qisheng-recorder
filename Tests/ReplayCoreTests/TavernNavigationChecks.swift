@@ -70,6 +70,28 @@ func checkTavernNavigation() throws {
     precondition(blocked.observe(world + [line("验证码", 0.4, 0.4)], width: 1324, height: 752, zoom: nil, at: 1) != .openMap)
     var missing = TavernNavigationFlow(at: 0)
     precondition(missing.observe([], width: 1324, height: 752, zoom: nil, at: 26) != .openMap)
+    var nearbyFlow = TavernNavigationFlow(at: 0)
+    func near(_ lines: [TextLine], _ time: Double) -> TavernNavigationFlow.Action {
+        nearbyFlow.observe(lines, width: 1324, height: 752, zoom: nil, at: time)
+    }
+    precondition(near(world, 0) == .wait && near(nearby, 1) == .wait && near(nearby, 2) == .wait)
+    precondition(near(nearby, 5) == .wait && near(nearby, 6) == .forward)
+    precondition(near(prompt, 7) == .wait && near(prompt, 8) == .arrived)
+    var retry = TavernNavigationFlow(at: 0)
+    func retryObserve(_ lines: [TextLine], _ time: Double) -> TavernNavigationFlow.Action {
+        retry.observe(lines, width: 1324, height: 752, zoom: nil, at: time)
+    }
+    precondition(retryObserve(world, 0) == .wait && retryObserve(world, 1) == .openMap)
+    precondition(retryObserve(world, 4) == .wait && retryObserve(world, 5) == .wait)
+    retry.resetEvidence()
+    precondition(retryObserve(world, 6) == .wait && retryObserve(world, 7) == .retryMap)
+    precondition(retryObserve(world, 12) == .wait && retryObserve(world, 13) == .wait)
+    precondition(retryObserve(layer, 14) == .wait)
+    guard case .click(_, .mapLayers) = retryObserve(layer, 15) else { preconditionFailure("map after retry") }
+    let page = CGRect(x: 0, y: 90, width: 1324, height: 820)
+    precondition(GameViewport.samePageBounds(page, page.offsetBy(dx: 0.5, dy: 0.5)))
+    precondition(!GameViewport.samePageBounds(page, page.offsetBy(dx: 0, dy: 30)))
+    precondition(!GameViewport.samePageBounds(page, CGRect(x: 0, y: 90, width: 1324, height: 790)))
 
     let empty = [UInt8](repeating: 0, count: 1324 * 752 * 4)
     precondition(TavernMapZoom.point(rgba: empty, width: 1324, height: 752) == nil)
