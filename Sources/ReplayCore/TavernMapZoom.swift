@@ -6,7 +6,7 @@ public enum TavernMapZoom {
         guard width >= 500, height >= 300, rgba.count == width * height * 4,
               (1.65...1.86).contains(Double(width) / Double(height)) else { return nil }
         let radius = max(4, Int((Double(height) * 0.0093).rounded()))
-        let cross = max(1, Int((Double(radius) * 0.30).rounded()))
+        let cross = max(1, Int((Double(radius) * 0.24).rounded()))
         let diagonal = max(2, Int((Double(radius) * 0.55).rounded()))
         let inside = max(2, Int((Double(radius) * 0.40).rounded()))
         func light(_ x: Int, _ y: Int) -> Int {
@@ -28,9 +28,9 @@ public enum TavernMapZoom {
                 let mid = middle.map { light(x + $0.0, y + $0.1) }
                 let rim = ring.map { light(x + $0.0, y + $0.1) }
                 let dark = gaps.map { light(x + $0.0, y + $0.1) }
-                guard mid.filter({ $0 >= 155 }).count >= 4,
-                      rim.filter({ $0 >= 150 }).count >= 6,
-                      dark.filter({ $0 < 155 }).count >= 3 else { continue }
+                guard mid.filter({ $0 >= 145 }).count >= 4,
+                      rim.filter({ $0 >= 135 }).count >= 6,
+                      dark.filter({ $0 < 160 }).count >= 3 else { continue }
                 let score = mid.reduce(0, +) + rim.reduce(0, +) - dark.reduce(0, +)
                 if best == nil || score > best!.score { best = (score, x, y) }
             }

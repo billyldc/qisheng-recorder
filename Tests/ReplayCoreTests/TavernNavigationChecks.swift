@@ -73,6 +73,8 @@ func checkTavernNavigation() throws {
 
     let empty = [UInt8](repeating: 0, count: 1324 * 752 * 4)
     precondition(TavernMapZoom.point(rgba: empty, width: 1324, height: 752) == nil)
+    let white = [UInt8](repeating: 255, count: 960 * 544 * 4)
+    precondition(TavernMapZoom.point(rgba: white, width: 960, height: 544) == nil)
     if let index = CommandLine.arguments.firstIndex(of: "--tavern-zoom-fixture"), index + 1 < CommandLine.arguments.count {
         let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
