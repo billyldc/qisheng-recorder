@@ -29,6 +29,15 @@ func checkTavernNavigation() throws {
     precondition(!TavernNavigationEvidence.worldVisible(Array(world.dropLast())))
     precondition(TavernNavigationEvidence.princeNearby(nearby))
     precondition(!TavernNavigationEvidence.princeNearby(world))
+    let misread = world + [line("「冰王子」", 0.465, 0.198, 0.057, 0.026),
+                           line("＜猫之牌圣>", 0.465, 0.227, 0.057, 0.024)]
+    precondition(TavernNavigationEvidence.princeNearby(misread))
+    precondition(!TavernNavigationEvidence.princeNearby(world + [line("雪王子", 0.465, 0.198), line("猫之牌圣", 0.465, 0.227)]))
+    precondition(!TavernNavigationEvidence.princeNearby(world + [line("冰王子", 0.465, 0.198), line("牌圣之手", 0.465, 0.227)]))
+    precondition(!TavernNavigationEvidence.princeNearby(world + [line("冰王子", 0.465, 0.198), line("猫之牌圣", 0.6, 0.227)]))
+    precondition(!TavernNavigationEvidence.princeNearby(world + [line("冰王子", 0.465, 0.198), line("猫之牌圣", 0.465, 0.35)]))
+    precondition(!TavernNavigationEvidence.princeNearby(misread + [line("小王子", 0.49, 0.19)]))
+    precondition(!TavernNavigationEvidence.princeNearby(misread + [line("猫之牌圣", 0.49, 0.23)]))
     precondition(TavernNavigationEvidence.layerPoint(layer) != nil)
     precondition(TavernNavigationEvidence.layerPoint(regions) == nil)
     precondition(TavernNavigationEvidence.regionPoint(regions) != nil)

@@ -83,7 +83,18 @@ public enum TavernNavigationEvidence {
 
     public static func princeNearby(_ lines: [TextLine]) -> Bool {
         guard worldVisible(lines) else { return false }
-        return lines.contains { valid($0) && compact($0.text) == "小王子" && (0.3...0.7).contains($0.x) && (0.05...0.5).contains($0.y) } &&
-            lines.contains { valid($0) && compact($0.text).contains("猫之牌圣") && (0.3...0.7).contains($0.x) && $0.y < 0.55 }
+        // Vision may read 小王子 as 冰王子; the aligned unique title is mandatory.
+        let names = lines.filter {
+            valid($0) && ["小王子", "冰王子"].contains(compact($0.text)) &&
+            (0.3...0.7).contains($0.x) && (0.05...0.5).contains($0.y)
+        }
+        let titles = lines.filter {
+            valid($0) && compact($0.text) == "猫之牌圣" &&
+            (0.3...0.7).contains($0.x) && $0.y < 0.55
+        }
+        guard names.count == 1, titles.count == 1, let name = names.first, let title = titles.first else { return false }
+        let horizontalDifference = abs((name.x + name.width/2) - (title.x + title.width/2))
+        let verticalGap = title.y - (name.y + name.height)
+        return horizontalDifference <= 0.05 && (-0.01...0.055).contains(verticalGap)
     }
 }
