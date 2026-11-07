@@ -998,6 +998,9 @@ final class AppModel: ObservableObject {
             }
             do {
                 guard self.session.unlocked else { throw RecorderError.message("请先解锁 Mac mini，再启动云原神。") }
+                try self.session.begin()
+                self.sessionRunning = true
+                self.addLog("启动期间已开启临时防休眠；完成或停止后释放。")
                 self.settings.targetBundleID = SafariLauncher.bundleID
                 self.settings.captureMode = .window
                 self.region = nil; self.rows = []; self.preview = nil; self.keepAliveTarget = nil
@@ -1043,8 +1046,6 @@ final class AppModel: ObservableObject {
                         continue
                     }
                     if !navigationKeepAliveStarted && (![.login, .unknown, .disconnected].contains(state) || CloudLaunchPolicy.hasGameSession(lines)) {
-                        try self.session.begin()
-                        self.sessionRunning = true
                         navigationKeepAlive.start(at: ProcessInfo.processInfo.systemUptime)
                         navigationKeepAliveStarted = true
                         self.addLog("已确认云原神登录页面：导航和录制保活开启，每 \(Int(self.settings.keepAliveSeconds)) 秒仅移动鼠标；本批结束或停止时关闭")
