@@ -48,7 +48,8 @@ private struct PerspectiveFixtureSequence: Decodable {
     var referenceFavorites: FavoriteReference?
     var frames: [Frame]
     struct FavoriteReference: Decodable {
-        var lines: [TextLine]
+        var lines: [TextLine]?
+        var image: String?
         var date: String
         var play: ReplayCore.UnitPoint
     }
@@ -77,7 +78,15 @@ private func checkPerspectiveSequence(at url: URL, resources: URL) throws {
         }
         reference = headers
     } else if let fixtureReference = fixture.referenceFavorites {
-        guard let headers = ReplayPlayerHeaders.fromFavorites(fixtureReference.lines, date: fixtureReference.date, play: fixtureReference.play) else {
+        let lines: [TextLine]
+        if let name = fixtureReference.image {
+            let path = url.deletingLastPathComponent().appendingPathComponent(name).path
+            guard let image = NSImage(contentsOfFile: path)?.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                throw RecorderError.message("Cannot read the favorites fixture")
+            }
+            lines = try Metadata.text(in: image)
+        } else { lines = fixtureReference.lines ?? [] }
+        guard let headers = ReplayPlayerHeaders.fromFavorites(lines, date: fixtureReference.date, play: fixtureReference.play) else {
             throw RecorderError.message("Cannot read the fixture's favorites orientation reference")
         }
         reference = headers
@@ -100,10 +109,10 @@ private func checkPerspectiveSequence(at url: URL, resources: URL) throws {
         let menu = ReplayPerspectiveMenu.detect(lines)?.labelTarget.rawValue ??
             (ReplayPerspectiveMenu.isOpen(lines) ? "unavailable" : "closed")
         let playback = controls.playback?.state.rawValue ?? "unknown"
-        let headers = ReplayPlayerHeaders.detect(lines, matching: reference)
+        let headers = ReplayPlayerHeaders.detect(lines, matching: reference) ?? ReplayPlayerHeaders.detect(lines)
         let orientation: String
-        if let reference, headers == reference { orientation = "own" }
-        else if let reference, headers == reference.swapped { orientation = "opponent" }
+        if let reference, headers?.perspective(relativeTo: reference) == .own { orientation = "own" }
+        else if let reference, headers?.perspective(relativeTo: reference) == .opponent { orientation = "opponent" }
         else { orientation = "unknown" }
         let decision = flow.observe(lines: lines, controls: controls, at: frame.at)
         let action: String

@@ -113,6 +113,25 @@ extension CoreTests {
         precondition(ReplayPlayerHeaders.detect(statuses, matching: reference) == nil)
         precondition(ReplayPlayerHeaders.detect(playerHeaders(.own, sameNames: true), matching: reference) == nil)
 
+        var misreadList = favoriteRow()
+        misreadList[1].text = "misread"
+        let misreadReference = ReplayPlayerHeaders.fromFavorites(misreadList, date: date, play: play)!
+        let observedOwn = ReplayPlayerHeaders.detect(playerHeaders(.own))!
+        let observedOpponent = ReplayPlayerHeaders.detect(playerHeaders(.opponent))!
+        precondition(observedOwn.perspective(relativeTo: misreadReference) == .own)
+        precondition(observedOpponent.perspective(relativeTo: misreadReference) == .opponent)
+        var unrelated = playerHeaders(.own)
+        unrelated[0].text = "otherA"; unrelated[2].text = "otherB"
+        precondition(ReplayPlayerHeaders.detect(unrelated)?.perspective(relativeTo: misreadReference) == nil)
+        precondition(ReplayPlayerHeaders.detect(playerHeaders(.own, sameNames: true)) == nil)
+        var misreadFlow = ReplayPerspectiveFlow(desired: .opponent, originalHeaders: misreadReference)
+        let running = ReplayPlaybackControls(gear: .init(x: 0.97, y: 0.12),
+            playback: .init(point: .init(x: 0.87, y: 0.9), state: .running))
+        precondition(misreadFlow.observe(lines: playerHeaders(.opponent), controls: running, at: 0) == .wait)
+        precondition(misreadFlow.observe(lines: playerHeaders(.opponent), controls: running, at: 1) == .wait)
+        precondition(misreadFlow.confirmedPerspective == .opponent)
+        precondition(misreadFlow.observe(lines: playerHeaders(.opponent), controls: running, at: 2) == .finished)
+
         var alreadySwapped = ReplayPerspectiveFlow(desired: .opponent, originalHeaders: reference)
         let controls = ReplayPlaybackControls(gear: .init(x: 0.97, y: 0.12),
             playback: .init(point: .init(x: 0.87, y: 0.9), state: .paused))

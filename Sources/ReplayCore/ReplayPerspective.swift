@@ -129,6 +129,16 @@ public struct ReplayPlayerHeaders: Equatable {
     public let bottom: String
     public var swapped: Self { Self(top: bottom, bottom: top) }
 
+    /// Both observed headers must be readable; one exact, unambiguous name match
+    /// is enough when the other name was misread in the favorites list.
+    public func perspective(relativeTo reference: Self) -> ReplayPerspective? {
+        guard top != bottom, reference.top != reference.bottom else { return nil }
+        let original = top == reference.top || bottom == reference.bottom
+        let reversed = top == reference.bottom || bottom == reference.top
+        guard original != reversed else { return nil }
+        return original ? .own : .opponent
+    }
+
     private static func normalized(_ name: String) -> String {
         name.lowercased().filter { !$0.isWhitespace }
             .replacingOccurrences(of: "l", with: "i").replacingOccurrences(of: "1", with: "i")
@@ -234,14 +244,14 @@ public struct ReplayPerspectiveFlow {
 
     public mutating func observe(lines: [TextLine], controls: ReplayPlaybackControls, at now: Double) -> Action {
         guard desired.requiresSwitch else { return .finished }
-        let headers = ReplayPlayerHeaders.detect(lines, matching: originalHeaders)
+        let headers = ReplayPlayerHeaders.detect(lines, matching: originalHeaders) ?? ReplayPlayerHeaders.detect(lines)
         let stableHeaders = headers != nil && headers == previousHeaders ? headers : nil
         previousHeaders = headers
         if !switchRequested && originalHeaders == nil { originalHeaders = stableHeaders }
-        if let originalHeaders, stableHeaders == originalHeaders.swapped {
+        if let originalHeaders, stableHeaders?.perspective(relativeTo: originalHeaders) == .opponent {
             confirmedPerspective = desired
         }
-        if let originalHeaders, stableHeaders == originalHeaders {
+        if let originalHeaders, stableHeaders?.perspective(relativeTo: originalHeaders) == .own {
             confirmedPerspective = nil
         }
         if let gear = controls.gear { menuGear = gear }
@@ -262,7 +272,7 @@ public struct ReplayPerspectiveFlow {
             }
             let stableMenu = ReplayPerspectiveMenu.stable(previousMenu, menu)
             previousMenu = menu
-            if let originalHeaders, headers == originalHeaders.swapped { return .wait }
+            if let originalHeaders, headers?.perspective(relativeTo: originalHeaders) == .opponent { return .wait }
             guard pausedForSwitch else {
                 // An externally opened menu is not evidence that playback paused.
                 beginRecovery(at: now)
@@ -314,7 +324,7 @@ public struct ReplayPerspectiveFlow {
             case .finished: break
             }
             if confirmedPerspective == desired { return .finished }
-            if let originalHeaders, stableHeaders == originalHeaders, now - switchAt >= 8 {
+            if let originalHeaders, stableHeaders?.perspective(relativeTo: originalHeaders) == .own, now - switchAt >= 8 {
                 // Retry only when both player names still occupy their original sides.
                 switchRequested = false
             } else {
@@ -324,7 +334,7 @@ public struct ReplayPerspectiveFlow {
             }
         }
         guard originalHeaders != nil else { return .wait }
-        if let originalHeaders, headers == originalHeaders.swapped { return .wait }
+        if let originalHeaders, headers?.perspective(relativeTo: originalHeaders) == .opponent { return .wait }
         switch pausePreparation.observe(controls, at: now) {
         case .wait: return .wait
         case .pause(let point): return .pause(point)

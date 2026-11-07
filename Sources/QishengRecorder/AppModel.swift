@@ -813,9 +813,9 @@ final class AppModel: ObservableObject {
                         let exit = text.first { $0.text.contains("退出观看") }
                         let ending = text.contains { $0.text.contains("对局胜利") || $0.text.contains("对局失败") }
                         if replay.preferredPerspective.requiresSwitch, let reference = originalHeaders {
-                            let current = ReplayPlayerHeaders.detect(text, matching: reference)
-                            if let current, current == previousHeaders {
-                                let confirmed = current == reference.swapped
+                            let current = ReplayPlayerHeaders.detect(text, matching: reference) ?? ReplayPlayerHeaders.detect(text)
+                            if let current, current == previousHeaders, let perspective = current.perspective(relativeTo: reference) {
+                                let confirmed = perspective == .opponent
                                 if self.perspectiveVerified != confirmed {
                                     self.perspectiveVerified = confirmed
                                     replay.confirmedPerspective = confirmed ? .opponent : nil
