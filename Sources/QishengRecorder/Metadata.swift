@@ -17,7 +17,7 @@ enum Metadata {
         request.recognitionLanguages = keycap ? ["en-US"] : ["zh-Hans", "en-US"]
         request.usesLanguageCorrection = !keycap
         if keycap { request.minimumTextHeight = 0.003 }
-        request.customWords = keycap ? ["F"] : ["小王子", "观看一下对局回放", "牌手等级", "铸境研炼", "酒馆牌局挑战", "卡牌商店", "收藏对局", "最近对局", "查看规则书", "切换至对手视角", "切换至我方视角", "退出观看"]
+        request.customWords = keycap ? ["F"] : ["小王子", "猫之牌圣", "猫尾酒馆", "传送至猫尾酒馆", "蒙德城", "观看一下对局回放", "牌手等级", "铸境研炼", "酒馆牌局挑战", "卡牌商店", "收藏对局", "最近对局", "查看规则书", "切换至对手视角", "切换至我方视角", "退出观看"]
         try VNImageRequestHandler(cgImage: image).perform([request])
         return (request.results ?? []).compactMap { result in
             guard let candidate = result.topCandidates(1).first else { return nil }

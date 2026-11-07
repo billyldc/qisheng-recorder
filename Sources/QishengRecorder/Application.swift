@@ -32,6 +32,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runPerspectiveSelfTest()
             return
         }
+        if CommandLine.arguments.contains("--tavern-self-test") {
+            runTavernSelfTest()
+            return
+        }
+        if CommandLine.arguments.contains("--tavern-flow-self-test") {
+            runTavernFlowSelfTest()
+            return
+        }
         if CommandLine.arguments.contains("--views-ui-self-test") {
             runViewsUISelfTest()
             return

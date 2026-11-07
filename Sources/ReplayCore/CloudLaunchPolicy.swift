@@ -1,7 +1,7 @@
 import Foundation
 
 public enum CloudPageState: String, Sendable {
-    case favorites, recentReplays, prince, princeGreeting, princeDialogue, replayEnd, gameEntry, loading, login, launcher, unknown
+    case favorites, recentReplays, prince, princeGreeting, princeDialogue, replayEnd, gameEntry, loading, login, launcher, disconnected, dailyReward, unknown
 }
 
 public enum CloudLaunchPolicy {
@@ -17,6 +17,9 @@ public enum CloudLaunchPolicy {
     public static func state(_ lines: [TextLine]) -> CloudPageState {
         let text = lines.map { $0.text.filter { !$0.isWhitespace } }.joined(separator: "\n")
         if ["验证码", "短信登录", "密码登录", "扫码登录", "手机号登录"].contains(where: text.contains) { return .login }
+        if text.contains("连接中断"), uniquePoint(lines, labels: ["退出游戏"]) != nil { return .disconnected }
+        if ["每日登录奖励", "每日登陆奖励"].contains(where: text.contains), text.contains("免费时长"),
+           uniquePoint(lines, labels: ["我知道了"]) != nil { return .dailyReward }
         // The recent tab also displays a top-right “收藏对局 5/5” counter.
         // Only the left-hand page heading is evidence of the selected favorites tab.
         if text.contains("最近对局") { return .recentReplays }
@@ -36,7 +39,7 @@ public enum CloudLaunchPolicy {
 
     /// Enable move-only keepalive even when the already-running world needs another OCR pass.
     public static func hasGameSession(_ lines: [TextLine]) -> Bool {
-        guard state(lines) != .login else { return false }
+        guard ![.login, .disconnected].contains(state(lines)) else { return false }
         return lines.contains {
             $0.x > 0.7 && $0.y > 0.65 && compact($0.text).range(of: #"^UID[:：]?[0-9]{5,15}$"#, options: .regularExpression) != nil
         }
@@ -50,6 +53,8 @@ public enum CloudLaunchPolicy {
 
     public static func navigationPoint(_ lines: [TextLine]) -> UnitPoint? {
         switch state(lines) {
+        case .disconnected: return uniquePoint(lines, labels: ["退出游戏"])
+        case .dailyReward: return uniquePoint(lines, labels: ["我知道了"])
         case .gameEntry: return uniquePoint(lines, labels: ["点击进入"])
         case .princeDialogue: return princeReplayPoint(lines)
         case .prince: return princePoint(lines)
@@ -57,6 +62,20 @@ public enum CloudLaunchPolicy {
         case .replayEnd: return uniquePoint(lines, labels: ["退出观看"])
         default: return nil
         }
+    }
+
+    public static func confirmedDisconnectExit(_ first: [TextLine], _ second: [TextLine]) -> UnitPoint? {
+        guard state(first) == .disconnected, state(second) == .disconnected,
+              let a = navigationPoint(first), let b = navigationPoint(second),
+              abs(a.x - b.x) < 0.025, abs(a.y - b.y) < 0.025 else { return nil }
+        return b
+    }
+
+    public static func confirmedDailyReward(_ first: [TextLine], _ second: [TextLine]) -> UnitPoint? {
+        guard state(first) == .dailyReward, state(second) == .dailyReward,
+              let a = navigationPoint(first), let b = navigationPoint(second),
+              abs(a.x - b.x) < 0.025, abs(a.y - b.y) < 0.025 else { return nil }
+        return b
     }
 
     public static func recentTabKeyPoint(_ lines: [TextLine]) -> UnitPoint? {

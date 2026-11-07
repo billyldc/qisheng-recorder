@@ -92,7 +92,7 @@ enum SafariLauncher {
         return true
     }
 
-    enum GameKey { case interact, favorites, advanceDialogue }
+    enum GameKey { case interact, favorites, advanceDialogue, map, forward }
 
     static func pressGameKey(_ key: GameKey, in window: CaptureWindow,
                              validateSession: @MainActor () throws -> Void) async throws {
@@ -132,11 +132,13 @@ enum SafariLauncher {
         case .interact: code = 3 // F
         case .favorites: code = 14 // E
         case .advanceDialogue: code = 49 // Space
+        case .map: code = 46 // M
+        case .forward: code = 13 // W
         }
         let events = try KeyboardInput.key(code) // Physical game keys, never text injection.
         events[0].post(tap: .cghidEventTap)
         // Always release a posted key even when cancellation or focus change occurs mid-key.
-        try? await Task.sleep(for: .milliseconds(180))
+        try? await Task.sleep(for: .milliseconds(key == .forward ? 650 : 180))
         events[1].post(tap: .cghidEventTap)
         try validate()
     }

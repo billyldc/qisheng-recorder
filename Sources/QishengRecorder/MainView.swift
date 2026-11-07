@@ -212,7 +212,7 @@ struct MainView: View {
                         if model.cloudLaunchPhase == .login { Label("等待登录或验证码", systemImage: "person.badge.key").foregroundStyle(.orange) }
                         else if model.cloudLaunchPhase == .needsFavorites { Label("需要进入收藏列表", systemImage: "hand.raised").foregroundStyle(.orange) }
                     }
-                    controlNote("Safari 的“开始录制”会先登录、启动游戏，并从小王子 F 对话进入回放，再按 E 切到收藏。需在猫尾酒馆靠近小王子；验证码仍需手动处理。自动密码登录和协议设置分别开启；加载最多等 6 分钟。登录后自动开启保活，覆盖导航与录制，本批结束或停止时关闭。上方入口录当前页全部对局，下方保留已勾选对局和人工角色修正，不翻页。")
+                    controlNote("Safari 的“开始录制”会先登录并启动游戏；游戏画面可识别时尝试通过地图前往猫尾酒馆，再与小王子对话并切到收藏。无法确认地图或遇到验证码时会停止并提示。自动密码登录和协议设置分别开启；本批导航和录制期间保活，结束或停止时关闭。上方入口录当前页全部对局，下方保留已勾选对局和人工角色修正，不翻页。")
                 }
                 Picker("录制范围", selection: $model.settings.captureMode) {
                     Label("手动选框", systemImage: "viewfinder").tag(CaptureMode.region)
@@ -286,6 +286,7 @@ struct MainView: View {
                             Text("\(Int(region.sourceRect.width)) × \(Int(region.sourceRect.height)) 点").monospacedDigit()
                         }
                         Toggle("自动点击二倍速", isOn: $model.settings.speed2x)
+                        controlNote("录制期间复核倍速；多次未成功时继续录制，并在运行日志提示核对。")
                         Label(model.calibration.speed == nil ? "二倍速：自动识别" : "二倍速：手动校准优先", systemImage: "scope")
                             .font(.caption).foregroundStyle(.secondary)
                         Button { model.calibrate("speed") } label: {

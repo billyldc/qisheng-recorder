@@ -1,0 +1,86 @@
+import AppKit
+import ImageIO
+import ReplayCore
+
+@MainActor
+func runTavernSelfTest() {
+    do {
+        let args = CommandLine.arguments
+        guard let index = args.firstIndex(of: "--tavern-self-test"), args.count == index + 3,
+              let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: args[index + 1]) as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw RecorderError.message("Invalid fixture arguments") }
+        let lines = try ["worldFull", "princePrompt"].contains(args[index + 2]) ? Metadata.cloudNavigationText(in: image) : Metadata.text(in: image)
+        let result: Bool
+        switch args[index + 2] {
+        case "world": result = TavernNavigationEvidence.worldVisible(lines) && TavernNavigationEvidence.princeNearby(lines)
+        case "worldFull": result = TavernNavigationEvidence.worldVisible(lines)
+        case "princePrompt": result = CloudLaunchPolicy.state(lines) == .prince
+        case "regions": result = TavernNavigationEvidence.regionPoint(lines) != nil
+        case "cityInitial": result = TavernNavigationEvidence.isMondstadtMap(lines) && GameViewport.rgba(image).flatMap { TavernMapZoom.point(rgba: $0, width: image.width, height: image.height) } != nil
+        case "city": result = TavernNavigationEvidence.isMondstadtMap(lines) && TavernNavigationEvidence.clusterPoint(lines, width: image.width, height: image.height) != nil && GameViewport.rgba(image).flatMap { TavernMapZoom.point(rgba: $0, width: image.width, height: image.height) } != nil
+        case "candidates": result = TavernNavigationEvidence.tavernCandidatePoint(lines) != nil
+        case "panel": result = TavernNavigationEvidence.teleportPoint(lines) != nil
+        default: result = false
+        }
+        guard result else { throw RecorderError.message("Fixture evidence did not match \(args[index + 2])") }
+        print("PASS: private tavern fixture \(args[index + 2])")
+        NSApp.terminate(nil)
+    } catch {
+        fputs("FAIL: \(error.localizedDescription)\n", stderr)
+        exit(1)
+    }
+}
+
+/// Reuses ordered, repeated fixture images for state transitions; it never sends input.
+@MainActor
+func runTavernFlowSelfTest() {
+    do {
+        let args = CommandLine.arguments
+        guard let index = args.firstIndex(of: "--tavern-flow-self-test"), args.count == index + 8 else {
+            throw RecorderError.message("Invalid tavern flow fixture arguments")
+        }
+        func image(_ offset: Int) throws -> CGImage {
+            guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: args[index + offset]) as CFURL, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw RecorderError.message("Unable to read tavern fixture") }
+            return image
+        }
+        let images = try (1...7).map(image)
+        let texts = try images.enumerated().map { position, image in
+            try position == 6 ? Metadata.cloudNavigationText(in: image) : Metadata.text(in: image)
+        }
+        let zoomInitial = GameViewport.rgba(images[2]).flatMap { TavernMapZoom.point(rgba: $0, width: images[2].width, height: images[2].height) }
+        let zoomFinal = GameViewport.rgba(images[3]).flatMap { TavernMapZoom.point(rgba: $0, width: images[3].width, height: images[3].height) }
+        guard let zoomInitial, let zoomFinal else { throw RecorderError.message("Zoom fixture not recognized") }
+        var flow = TavernNavigationFlow(at: 0)
+        func observe(_ position: Int, _ time: Double, _ zoom: UnitPoint? = nil) -> TavernNavigationFlow.Action {
+            flow.observe(texts[position], width: images[position].width, height: images[position].height, zoom: zoom, at: time)
+        }
+        func require(_ condition: @autoclosure () -> Bool) throws {
+            guard condition() else { throw RecorderError.message("Tavern flow fixture did not match") }
+        }
+        try require(observe(0, 0) == .wait && observe(0, 1) == .openMap)
+        try require(observe(2, 2) == .wait)
+        if case .click(_, .mapLayers) = observe(2, 3) {} else { throw RecorderError.message("Map layer fixture did not match") }
+        try require(observe(1, 4) == .wait)
+        if case .click(_, .mondstadt) = observe(1, 5) {} else { throw RecorderError.message("Region fixture did not match") }
+        for step in 0..<8 {
+            let at = 6.0 + Double(step) * 2, position = step == 0 ? 2 : 3
+            let zoom = step == 0 ? zoomInitial : zoomFinal
+            try require(observe(position, at, zoom) == .wait)
+            if case .click(_, .zoom) = observe(position, at + 1, zoom) {} else { throw RecorderError.message("Zoom flow fixture did not match") }
+        }
+        try require(observe(3, 22, zoomFinal) == .wait)
+        if case .click(_, .iconCluster) = observe(3, 23, zoomFinal) {} else { throw RecorderError.message("Cluster fixture did not match") }
+        try require(observe(4, 24) == .wait)
+        if case .click(_, .tavernCandidate) = observe(4, 25) {} else { throw RecorderError.message("Tavern candidate fixture did not match") }
+        try require(observe(5, 26) == .wait)
+        if case .click(_, .teleport) = observe(5, 27) {} else { throw RecorderError.message("Teleport fixture did not match") }
+        try require(observe(0, 30) == .wait && observe(0, 31) == .forward)
+        try require(observe(6, 32) == .wait && observe(6, 33) == .arrived)
+        print("PASS: reordered repeated private tavern screenshots through production OCR and navigation flow; no input sent")
+        NSApp.terminate(nil)
+    } catch {
+        fputs("FAIL: \(error.localizedDescription)\n", stderr)
+        exit(1)
+    }
+}

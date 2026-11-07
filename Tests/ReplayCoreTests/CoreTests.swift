@@ -53,6 +53,7 @@ final class CoreTests {
         tests.testPerspectiveFlowSequences()
         tests.testEachReplayHasFreshEntryGrace()
         checkRecordingReliability()
+        try checkTavernNavigation()
         checkGameViewport()
         try checkPrivateViewportFixtures()
         print("PASS: 39 geometry, metadata, file-safety, update, launch, perspective and recording-policy regression checks")

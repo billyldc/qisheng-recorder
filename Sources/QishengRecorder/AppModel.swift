@@ -899,6 +899,74 @@ final class AppModel: ObservableObject {
         else { startBatch() }
     }
 
+    private func navigateToTavern(window: CaptureWindow, region: CaptureRegion,
+                                  keepAlive: inout KeepAliveSchedule) async throws {
+        var flow = TavernNavigationFlow(at: ProcessInfo.processInfo.systemUptime)
+        let deadline = ProcessInfo.processInfo.systemUptime + 240
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            try Task.checkCancellation()
+            guard session.unlocked, SafariLauncher.pageURL(window).map(CloudLaunchPolicy.allowed) == true else {
+                throw RecorderError.message("桌面锁定或已离开云原神，地图导航已停止。")
+            }
+            let now = ProcessInfo.processInfo.systemUptime
+            if keepAlive.takeDue(at: now), try await sendPointerInput(UnitPoint(x: 0.78, y: 0.27), in: region, kind: .keepAlive) {
+                keepAliveCount += 1
+            }
+            let current = try region.resolved()
+            let image = try await recorder.screenshot(region: current)
+            let checkingArrival = flow.checkingArrival, needsZoom = flow.needsZoomControl
+            let (lines, zoom) = try await Task.detached {
+                let lines = try checkingArrival ? Metadata.cloudNavigationText(in: image) : Metadata.text(in: image)
+                let zoom = needsZoom ? GameViewport.rgba(image).flatMap {
+                    TavernMapZoom.point(rgba: $0, width: image.width, height: image.height)
+                } : nil
+                return (lines, zoom)
+            }.value
+            try Task.checkCancellation()
+            let action = flow.observe(lines, width: image.width, height: image.height, zoom: zoom,
+                                      at: ProcessInfo.processInfo.systemUptime)
+            switch action {
+            case .wait:
+                break
+            case .openMap, .forward:
+                let key: SafariLauncher.GameKey = action == .openMap ? .map : .forward
+                status = action == .openMap ? "已确认游戏画面，正在打开地图…" : "已确认到达猫尾酒馆，正在靠近小王子…"
+                try await hud.hideForClick()
+                do {
+                    try window.raise()
+                    try await Task.sleep(for: .milliseconds(300))
+                    let position = RegionGeometry.screenPoint(UnitPoint(x: 0.5, y: 0.5), source: current.sourceRect,
+                                                              displayOrigin: CGDisplayBounds(current.displayID).origin)
+                    guard window.checkClick(position).allowed else { throw RecorderError.message("游戏窗口被遮挡，已停止地图导航。") }
+                    try await SafariLauncher.pressGameKey(key, in: window) {
+                        guard self.session.unlocked, try region.resolved().globalRect == current.globalRect else {
+                            throw RecorderError.message("桌面或游戏窗口已改变，已停止地图导航。")
+                        }
+                    }
+                } catch { hud.restore(); throw error }
+                hud.restore()
+            case .click(let point, let kind):
+                switch kind {
+                case .mapLayers: status = "正在选择地图地区…"
+                case .mondstadt: status = "正在切换到蒙德地图…"
+                case .zoom: status = "正在确认并放大蒙德城地图…"
+                case .iconCluster: status = "正在查找猫尾酒馆地图图标…"
+                case .tavernCandidate: status = "已识别猫尾酒馆，正在打开传送详情…"
+                case .teleport: status = "已确认蒙德猫尾酒馆传送按钮，正在传送…"
+                }
+                if kind != .zoom { addLog(status) }
+                try await sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
+            case .arrived:
+                addLog("已确认小王子的 F 对话入口，继续启动回放。")
+                return
+            case .stop(let message):
+                throw RecorderError.message(message)
+            }
+            try await Task.sleep(for: .milliseconds(700))
+        }
+        throw RecorderError.message("地图导航超时，已停止；请检查地图或手动前往小王子。")
+    }
+
     func launchSafariAndRecord() { launchSafariAndRecord(preservingSelection: false) }
 
     private func launchSafariAndRecord(preservingSelection: Bool) {
@@ -953,6 +1021,7 @@ final class AppModel: ObservableObject {
                 defer { navigationKeepAlive.stop() }
                 var switchedPasswordTab = false
                 var attemptedPasswordLogin = false
+                var attemptedMapNavigation = false
                 while Date() < deadline {
                     try Task.checkCancellation()
                     guard self.session.unlocked else { throw RecorderError.message("桌面已锁定，启动已暂停。") }
@@ -973,7 +1042,7 @@ final class AppModel: ObservableObject {
                         try await Task.sleep(for: .seconds(1))
                         continue
                     }
-                    if !navigationKeepAliveStarted && (state != .login && state != .unknown || CloudLaunchPolicy.hasGameSession(lines)) {
+                    if !navigationKeepAliveStarted && (![.login, .unknown, .disconnected].contains(state) || CloudLaunchPolicy.hasGameSession(lines)) {
                         try self.session.begin()
                         self.sessionRunning = true
                         navigationKeepAlive.start(at: ProcessInfo.processInfo.systemUptime)
@@ -987,6 +1056,34 @@ final class AppModel: ObservableObject {
                         }
                     }
                     switch state {
+                    case .dailyReward:
+                        guard actions[state, default: 0] == 0 else {
+                            throw RecorderError.message("每日奖励提示未能关闭，请检查云原神页面。")
+                        }
+                        try await Task.sleep(for: .milliseconds(500))
+                        let secondImage = try await self.recorder.screenshot(region: region.resolved())
+                        let secondLines = try await Task.detached { try Metadata.cloudNavigationText(in: secondImage) }.value
+                        guard let point = CloudLaunchPolicy.confirmedDailyReward(lines, secondLines) else {
+                            throw RecorderError.message("每日奖励提示未能稳定确认，尚未点击。")
+                        }
+                        self.status = "已确认每日奖励提示，正在关闭提示并继续…"
+                        try await self.sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
+                        actions[state] = 1
+                        try await Task.sleep(for: .seconds(3))
+                    case .disconnected:
+                        guard actions[state, default: 0] == 0 else {
+                            throw RecorderError.message("云原神重连后仍显示连接中断，请检查网络后重试。")
+                        }
+                        self.status = "检测到云原神连接中断，正在复核后重新启动…"
+                        try await Task.sleep(for: .milliseconds(500))
+                        let secondImage = try await self.recorder.screenshot(region: region.resolved())
+                        let secondLines = try await Task.detached { try Metadata.cloudNavigationText(in: secondImage) }.value
+                        guard let point = CloudLaunchPolicy.confirmedDisconnectExit(lines, secondLines) else {
+                            throw RecorderError.message("连接中断弹窗未能稳定确认，尚未点击；请检查网络后继续。")
+                        }
+                        try await self.sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
+                        actions[state] = 1
+                        try await Task.sleep(for: .seconds(5))
                     case .login:
                         self.cloudLaunchPhase = .login
                         if self.settings.cloudAutoLogin && !attemptedPasswordLogin {
@@ -1147,6 +1244,13 @@ final class AppModel: ObservableObject {
                     case .loading:
                         self.status = "云原神正在加载或排队，最多等待 6 分钟；可随时停止。"
                     case .unknown:
+                        if !attemptedMapNavigation && TavernNavigationEvidence.worldVisible(lines) {
+                            attemptedMapNavigation = true
+                            self.status = "正在确认游戏画面边界，准备前往猫尾酒馆…"
+                            let gameRegion = try await GameCaptureRegion.prepare(region, recorder: self.recorder)
+                            try await self.navigateToTavern(window: window, region: gameRegion, keepAlive: &navigationKeepAlive)
+                            continue
+                        }
                         // Narrow local diagnostics: never dump login OCR or whole-page text.
                         let relevant = lines.filter { $0.text.contains("小王") || $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == "F" }
                         if !relevant.isEmpty, princeDiagnosticCount < 8 {
