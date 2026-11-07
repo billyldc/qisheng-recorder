@@ -6,7 +6,7 @@
 
 [安装包](https://github.com/billyldc/qisheng-recorder/releases) · [快速上手](#快速上手) · [常见问题](#常见问题) · [反馈问题](https://github.com/billyldc/qisheng-recorder/issues)
 
-> 当前正在准备 1.6.1 测试版，尚未发布正式安装包。录制和识别功能保留；双视角合成仍是实验脚本，尚未接入应用。
+> 当前正在准备 1.6.2 测试版，尚未完成完整实机验收。录制和识别功能保留；双视角合成仍是实验脚本，尚未接入应用。
 
 ## 可以做什么
 
