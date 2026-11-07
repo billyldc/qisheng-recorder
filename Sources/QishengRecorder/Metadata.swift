@@ -26,8 +26,9 @@ enum Metadata {
         }
     }
 
-    static func cloudNavigationText(in image: CGImage) throws -> [TextLine] {
-        let whole = try text(in: image)
+    static func cloudNavigationText(in image: CGImage, whole initial: [TextLine]? = nil) throws -> [TextLine] {
+        let whole: [TextLine]
+        if let initial { whole = initial } else { whole = try text(in: image) }
         let state = CloudLaunchPolicy.state(whole)
         guard [.unknown, .prince, .princeGreeting, .princeDialogue].contains(state) else { return whole }
         let choices = try princeDialogue(in: image)
@@ -38,6 +39,48 @@ enum Metadata {
             return whole + prompt
         }
         return whole
+    }
+
+    /// Re-read small HUD labels only when the game viewport lacks world evidence.
+    /// The caller still requires the full UID/Enter/E/Q combination before input.
+    static func worldNavigationText(in image: CGImage, arrival: Bool) throws -> [TextLine] {
+        var result = try text(in: image)
+        if arrival {
+            let navigation = try cloudNavigationText(in: image, whole: result)
+            if CloudLaunchPolicy.state(navigation) != .unknown { return navigation }
+        }
+        guard CloudLaunchPolicy.state(result) == .unknown,
+              !TavernNavigationEvidence.worldVisible(result),
+              TavernNavigationEvidence.layerPoint(result) == nil,
+              TavernNavigationEvidence.regionPoint(result) == nil,
+              TavernNavigationEvidence.teleportPoint(result) == nil else { return result }
+        let width = Double(image.width), height = Double(image.height)
+        let regions: [(CGRect, Double)] = [
+            (CGRect(x: 0, y: height * 0.82, width: width * 0.20, height: height * 0.18), 3),
+            (CGRect(x: width * 0.80, y: height * 0.82, width: width * 0.20, height: height * 0.18), 3),
+            (CGRect(x: width * 0.875, y: height * 0.943, width: width * 0.0875, height: height * 0.029), 10)
+        ]
+        for (proposed, preferredScale) in regions {
+            let crop = proposed.integral.intersection(CGRect(x: 0, y: 0, width: width, height: height))
+            guard !crop.isEmpty, let focused = image.cropping(to: crop) else { continue }
+            let scale = min(preferredScale, max(1, 1600 / Double(focused.width)), max(1, 1000 / Double(focused.height)))
+            let outputWidth = max(1, Int((Double(focused.width) * scale).rounded()))
+            let outputHeight = max(1, Int((Double(focused.height) * scale).rounded()))
+            guard let context = CGContext(data: nil, width: outputWidth, height: outputHeight,
+                                          bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { continue }
+            context.interpolationQuality = .high
+            context.draw(focused, in: CGRect(x: 0, y: 0, width: outputWidth, height: outputHeight))
+            guard let enlarged = context.makeImage() else { continue }
+            let additions = try text(in: enlarged).map {
+                TextLine(text: $0.text, x: (crop.minX + $0.x * crop.width) / width,
+                         y: (crop.minY + $0.y * crop.height) / height,
+                         width: $0.width * crop.width / width, height: $0.height * crop.height / height)
+            }
+            result = TavernNavigationEvidence.mergingWorldHUD(result, additions: additions)
+            if TavernNavigationEvidence.worldVisible(result) { break }
+        }
+        return result
     }
 
     /// Re-read the choice column separately so icons and background do not hide the replay label.

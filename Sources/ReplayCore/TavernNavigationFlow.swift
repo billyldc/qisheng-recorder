@@ -22,6 +22,7 @@ public struct TavernNavigationFlow {
     public init(at now: Double) { stageStarted = now }
     public var checkingArrival: Bool { stage == .arrival }
     public var needsZoomControl: Bool { stage == .zoom || stage == .cluster }
+    public var needsWorldEvidence: Bool { stage == .world || stage == .map || stage == .arrival }
     public mutating func resetEvidence() { lastSample = nil }
 
     private mutating func stable(_ point: UnitPoint?, at now: Double) -> Bool {

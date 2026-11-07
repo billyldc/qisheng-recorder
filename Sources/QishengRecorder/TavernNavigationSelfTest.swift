@@ -9,10 +9,17 @@ func runTavernSelfTest() {
         guard let index = args.firstIndex(of: "--tavern-self-test"), args.count == index + 3,
               let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: args[index + 1]) as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw RecorderError.message("Invalid fixture arguments") }
-        let lines = try ["worldFull", "worldArrival", "princePrompt"].contains(args[index + 2]) ? Metadata.cloudNavigationText(in: image) : Metadata.text(in: image)
+        let lines: [TextLine]
+        switch args[index + 2] {
+        case "worldCropped": lines = try Metadata.worldNavigationText(in: image, arrival: false)
+        case "worldArrival": lines = try Metadata.worldNavigationText(in: image, arrival: true)
+        case "worldFull", "princePrompt": lines = try Metadata.cloudNavigationText(in: image)
+        default: lines = try Metadata.text(in: image)
+        }
         let result: Bool
         switch args[index + 2] {
         case "world": result = TavernNavigationEvidence.worldVisible(lines) && TavernNavigationEvidence.princeNearby(lines)
+        case "worldCropped": result = TavernNavigationEvidence.worldVisible(lines) && TavernNavigationEvidence.princeNearby(lines)
         case "worldArrival": result = TavernNavigationEvidence.princeNearby(lines)
         case "worldFull": result = TavernNavigationEvidence.worldVisible(lines)
         case "princePrompt": result = CloudLaunchPolicy.state(lines) == .prince
@@ -47,8 +54,10 @@ func runTavernFlowSelfTest() {
         }
         let images = try (1...7).map(image)
         let texts = try images.enumerated().map { position, image in
-            try position == 6 ? Metadata.cloudNavigationText(in: image) : Metadata.text(in: image)
+            if position == 0 { return try Metadata.worldNavigationText(in: image, arrival: false) }
+            return try position == 6 ? Metadata.cloudNavigationText(in: image) : Metadata.text(in: image)
         }
+        let arrivalText = try Metadata.worldNavigationText(in: images[0], arrival: true)
         let zoomInitial = GameViewport.rgba(images[2]).flatMap { TavernMapZoom.point(rgba: $0, width: images[2].width, height: images[2].height) }
         let zoomFinal = GameViewport.rgba(images[3]).flatMap { TavernMapZoom.point(rgba: $0, width: images[3].width, height: images[3].height) }
         guard let zoomInitial, let zoomFinal else { throw RecorderError.message("Zoom fixture not recognized") }
@@ -78,14 +87,16 @@ func runTavernFlowSelfTest() {
         if case .click(_, .tavernCandidate) = observe(4, 25) {} else { throw RecorderError.message("Tavern candidate fixture did not match") }
         try require(observe(5, 26) == .wait)
         if case .click(_, .teleport) = observe(5, 27) {} else { throw RecorderError.message("Teleport fixture did not match") }
-        try require(observe(0, 30) == .wait && observe(0, 31) == .forward)
+        try require(flow.observe(arrivalText, width: images[0].width, height: images[0].height, zoom: nil, at: 30) == .wait &&
+                    flow.observe(arrivalText, width: images[0].width, height: images[0].height, zoom: nil, at: 31) == .forward)
         try require(observe(6, 32) == .wait && observe(6, 33) == .arrived)
         var nearby = TavernNavigationFlow(at: 0)
         func near(_ position: Int, _ time: Double) -> TavernNavigationFlow.Action {
             nearby.observe(texts[position], width: images[position].width, height: images[position].height, zoom: nil, at: time)
         }
         try require(near(0, 0) == .wait && near(0, 1) == .wait)
-        try require(near(0, 4) == .wait && near(0, 5) == .forward)
+        try require(nearby.observe(arrivalText, width: images[0].width, height: images[0].height, zoom: nil, at: 4) == .wait &&
+                    nearby.observe(arrivalText, width: images[0].width, height: images[0].height, zoom: nil, at: 5) == .forward)
         try require(near(6, 6) == .wait && near(6, 7) == .arrived)
         print("PASS: reordered repeated private tavern screenshots through production OCR and navigation flow; no input sent")
         NSApp.terminate(nil)

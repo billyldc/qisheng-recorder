@@ -27,6 +27,19 @@ func checkTavernNavigation() throws {
     precondition(TavernNavigationEvidence.worldVisible(world))
     precondition(!TavernNavigationEvidence.worldVisible(world + [line("验证码", 0.5, 0.5)]))
     precondition(!TavernNavigationEvidence.worldVisible(Array(world.dropLast())))
+    let partialWorld = [line("Q", 0.94, 0.95)]
+    let complementary = [uid, line("Enter", 0.045, 0.95), line("E", 0.88, 0.95)]
+    let supplemented = TavernNavigationEvidence.mergingWorldHUD(partialWorld, additions: complementary)
+    precondition(TavernNavigationEvidence.worldVisible(supplemented))
+    let duplicate = TavernNavigationEvidence.mergingWorldHUD(supplemented, additions: [line("E", 0.882, 0.951)])
+    precondition(TavernNavigationEvidence.worldVisible(duplicate))
+    let ambiguous = TavernNavigationEvidence.mergingWorldHUD(supplemented, additions: [line("E", 0.81, 0.95)])
+    precondition(!TavernNavigationEvidence.worldVisible(ambiguous))
+    let invalid = TavernNavigationEvidence.mergingWorldHUD(partialWorld, additions: [
+        line("Enter", 0.6, 0.4), line("E", 0.1, 0.1), line("Q", 0.1, 0.1),
+        line(uid.text, 0.2, 0.2), line("其他", 0.9, 0.9)
+    ])
+    precondition(invalid.count == partialWorld.count && !TavernNavigationEvidence.worldVisible(invalid))
     precondition(TavernNavigationEvidence.princeNearby(nearby))
     precondition(!TavernNavigationEvidence.princeNearby(world))
     let misread = world + [line("「冰王子」", 0.465, 0.198, 0.057, 0.026),

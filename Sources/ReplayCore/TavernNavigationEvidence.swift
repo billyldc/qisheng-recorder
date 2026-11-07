@@ -34,6 +34,33 @@ public enum TavernNavigationEvidence {
         return enter.x < e.x && e.x < q.x && abs(e.y - q.y) < 0.04
     }
 
+    /// Add only expected world-HUD text from enlarged crops. Duplicate OCR
+    /// observations of the same key are merged; distinct keys stay ambiguous.
+    public static func mergingWorldHUD(_ whole: [TextLine], additions: [TextLine]) -> [TextLine] {
+        func marker(_ line: TextLine) -> String? {
+            guard valid(line) else { return nil }
+            let value = compact(line.text)
+            if value == "Enter", line.x < 0.2, line.y > 0.8 { return value }
+            if value == "E", line.x > 0.75, line.y > 0.8 { return value }
+            if value == "Q", line.x > 0.8, line.y > 0.8 { return value }
+            if line.x > 0.7, line.y > 0.65,
+               value.range(of: #"^UID[0-9]{5,15}$"#, options: .regularExpression) != nil { return value }
+            return nil
+        }
+        var result = whole
+        for candidate in additions {
+            guard let key = marker(candidate) else { continue }
+            let center = UnitPoint(x: candidate.x + candidate.width/2, y: candidate.y + candidate.height/2)
+            let duplicate = result.contains { existing in
+                guard marker(existing) == key else { return false }
+                return abs(existing.x + existing.width/2 - center.x) < 0.015 &&
+                    abs(existing.y + existing.height/2 - center.y) < 0.015
+            }
+            if !duplicate { result.append(candidate) }
+        }
+        return result
+    }
+
     /// The lower-right map layer selector is only accepted at its known location.
     public static func layerPoint(_ lines: [TextLine]) -> UnitPoint? {
         guard safe(lines), regionPoint(lines) == nil, teleportPoint(lines) == nil else { return nil }

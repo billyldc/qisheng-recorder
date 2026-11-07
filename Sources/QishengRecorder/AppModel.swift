@@ -937,8 +937,11 @@ final class AppModel: ObservableObject {
             let current = try currentRegion.resolved()
             let image = try await recorder.screenshot(region: current)
             let checkingArrival = flow.checkingArrival, needsZoom = flow.needsZoomControl
+            let needsWorldEvidence = flow.needsWorldEvidence
             let (lines, zoom) = try await Task.detached {
-                let lines = try checkingArrival ? Metadata.cloudNavigationText(in: image) : Metadata.text(in: image)
+                let lines = try needsWorldEvidence
+                    ? Metadata.worldNavigationText(in: image, arrival: checkingArrival)
+                    : Metadata.text(in: image)
                 let zoom = needsZoom ? GameViewport.rgba(image).flatMap {
                     TavernMapZoom.point(rgba: $0, width: image.width, height: image.height)
                 } : nil
@@ -1051,6 +1054,7 @@ final class AppModel: ObservableObject {
                 var switchedPasswordTab = false
                 var attemptedPasswordLogin = false
                 var attemptedMapNavigation = false
+                var nextWorldProbe = 0.0
                 while Date() < deadline {
                     try Task.checkCancellation()
                     guard self.session.unlocked else { throw RecorderError.message("桌面已锁定，启动已暂停。") }
@@ -1279,19 +1283,37 @@ final class AppModel: ObservableObject {
                     case .loading:
                         self.status = "云原神正在加载或排队，最多等待 6 分钟；可随时停止。"
                     case .unknown:
-                        if !attemptedMapNavigation && TavernNavigationEvidence.worldVisible(lines) {
-                            attemptedMapNavigation = true
-                            self.status = "正在确认游戏画面边界，准备前往猫尾酒馆…"
-                            guard let page = SafariLauncher.cloudContentRect(window) else {
-                                throw RecorderError.message("未能确认浏览器内的游戏区域，已停止导航。")
+                        let now = ProcessInfo.processInfo.systemUptime
+                        if !attemptedMapNavigation && now >= nextWorldProbe {
+                            nextWorldProbe = now + 12
+                            if let page = SafariLauncher.cloudContentRect(window) {
+                                var candidate: (CaptureRegion, [TextLine])?
+                                do {
+                                    let gameRegion = try await GameCaptureRegion.prepare(region, recorder: self.recorder)
+                                    let gameImage = try await self.recorder.screenshot(region: gameRegion.resolved())
+                                    let gameLines = try await Task.detached {
+                                        try Metadata.worldNavigationText(in: gameImage, arrival: true)
+                                    }.value
+                                    candidate = (gameRegion, gameLines)
+                                } catch is CancellationError {
+                                    throw CancellationError()
+                                } catch {
+                                    self.addLog("游戏区域暂未稳定，将稍后重新检查。")
+                                }
+                                try Task.checkCancellation()
+                                guard self.session.unlocked,
+                                      SafariLauncher.pageURL(window).map(CloudLaunchPolicy.allowed) == true else {
+                                    throw RecorderError.message("桌面已锁定或 Safari 已离开云原神，已停止导航。")
+                                }
+                                guard let confirmed = SafariLauncher.cloudContentRect(window),
+                                      GameViewport.samePageBounds(page, confirmed) else { continue }
+                                if let (gameRegion, gameLines) = candidate, TavernNavigationEvidence.worldVisible(gameLines) {
+                                    attemptedMapNavigation = true
+                                    self.status = "已确认游戏画面，准备前往猫尾酒馆…"
+                                    try await self.navigateToTavern(window: window, region: gameRegion, page: confirmed, keepAlive: &navigationKeepAlive)
+                                    continue
+                                }
                             }
-                            let gameRegion = try await GameCaptureRegion.prepare(region, recorder: self.recorder)
-                            guard let confirmed = SafariLauncher.cloudContentRect(window), GameViewport.samePageBounds(page, confirmed) else {
-                                attemptedMapNavigation = false
-                                continue
-                            }
-                            try await self.navigateToTavern(window: window, region: gameRegion, page: confirmed, keepAlive: &navigationKeepAlive)
-                            continue
                         }
                         // Narrow local diagnostics: never dump login OCR or whole-page text.
                         let relevant = lines.filter { $0.text.contains("小王") || $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == "F" }
