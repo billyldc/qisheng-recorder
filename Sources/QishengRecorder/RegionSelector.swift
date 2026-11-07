@@ -10,6 +10,7 @@ struct CaptureRegion {
     var anchorWindowID: CGWindowID? = nil
     var anchorFrame: CGRect? = nil
     var anchorOwnerPID: pid_t? = nil
+    var windowCrop: CGRect? = nil
     var globalRect: CGRect {
         sourceRect.offsetBy(dx: CGDisplayBounds(displayID).minX, dy: CGDisplayBounds(displayID).minY)
     }
@@ -23,7 +24,7 @@ struct CaptureRegion {
             guard abs(window.frame.width - anchorFrame.width) < 2, abs(window.frame.height - anchorFrame.height) < 2 else {
                 throw RecorderError.message("目标窗口尺寸已改变，已停止点击。请重新选择窗口并识别收藏列表。")
             }
-            return try window.region()
+            return try window.region(crop: windowCrop)
         }
         guard window.frame == anchorFrame, NSScreen.screens.contains(where: {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID

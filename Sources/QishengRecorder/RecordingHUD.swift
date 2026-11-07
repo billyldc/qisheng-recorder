@@ -52,7 +52,9 @@ private struct RecordingHUDView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Image(systemName: "record.circle.fill").foregroundStyle(model.recording ? .red : .orange)
-                Text(model.keepAliveOnly ? "只保活" : model.activeRow.map { "第 \($0) 局 · \(model.activePerspective?.label ?? "")" } ?? "七圣召唤录制器").font(.headline)
+                Text(model.keepAliveOnly ? "只保活" : model.activeRow.map {
+                    "第 \($0) 局 · \(model.perspectiveVerified ? model.activePerspective?.label ?? "" : "视角待确认")"
+                } ?? "七圣召唤录制器").font(.headline)
                 Spacer()
                 Text(String(format: "%02d:%02d", model.elapsed / 60, model.elapsed % 60)).monospacedDigit()
             }

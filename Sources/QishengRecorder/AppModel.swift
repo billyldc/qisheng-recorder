@@ -23,6 +23,7 @@ final class AppModel: ObservableObject {
     @Published var elapsed = 0
     @Published var activeRow: Int?
     @Published var activePerspective: ReplayPerspective?
+    @Published var perspectiveVerified = false
     @Published private(set) var keepAliveCount = 0
     @Published private(set) var keepAliveOnly = false
     @Published private(set) var keepAliveTarget: KeepAliveTarget?
@@ -59,6 +60,7 @@ final class AppModel: ObservableObject {
     private var interruption: Error?
     private var focusLostAt: Date?
     private var startAfterKeepAliveSelection = false
+    private var lastSessionDiagnostic = ""
     private let persistent: Bool
 
     init(persistent: Bool = true) {
@@ -113,7 +115,8 @@ final class AppModel: ObservableObject {
     }
     var profileKey: String {
         guard let region else { return "unselected" }
-        return "\(settings.targetBundleID)-\(region.windowID == nil ? "region" : "window")-\(legacyProfileKey)"
+        let crop = region.windowCrop.map { "-crop-\(Int($0.minX))-\(Int($0.minY))" } ?? ""
+        return "\(settings.targetBundleID)-\(region.windowID == nil ? "region" : "window")-\(legacyProfileKey)\(crop)"
     }
     private var legacyProfileKey: String {
         guard let region else { return "unselected" }
@@ -348,6 +351,9 @@ final class AppModel: ObservableObject {
                 try self.focusTarget()
                 self.mainWindow?.orderOut(nil)
                 try await Task.sleep(for: .milliseconds(300))
+                let region = try await GameCaptureRegion.prepare(region, recorder: self.recorder)
+                self.region = region
+                self.addLog(region.windowCrop == nil ? "沿用手动选框，不追加自动裁切" : "已确认游戏内容区：\(Int(region.sourceRect.width))×\(Int(region.sourceRect.height))；截图、点击和录制共用此区域")
                 let image = try await self.recorder.screenshot(region: region.resolved())
                 self.preview = NSImage(cgImage: image, size: .zero)
                 let resources = Bundle.main.resourceURL!
@@ -489,8 +495,38 @@ final class AppModel: ObservableObject {
         recording = true
     }
 
+    private func confirmReplayEntry(_ replay: Replay, region: CaptureRegion, keepAlive: inout KeepAliveSchedule) async throws {
+        let start = ProcessInfo.processInfo.systemUptime
+        var gate = ReplayEntryGate(at: start, grace: settings.loadingSeconds)
+        while true {
+            try Task.checkCancellation()
+            try recorder.checkFailure()
+            let image = try await recorder.screenshot(region: region.resolved())
+            let resources = Bundle.main.resourceURL!
+            let (lines, controls) = try await Task.detached {
+                (try Metadata.text(in: image), try Metadata.playback(image: image, resources: resources))
+            }.value
+            let now = ProcessInfo.processInfo.systemUptime
+            let list = lines.contains { ReplayText.date($0.text) != nil }
+            let sameRow = lines.filter { ReplayText.date($0.text) == replay.date && abs($0.y - replay.play.y) < 0.15 }.count == 1
+            switch gate.observe(listVisible: list, sameRow: sameRow, playbackVisible: controls.playback != nil, at: now) {
+            case .entered: addLog("第 \(replay.id) 局：已连续确认回放控件，视频写入正常"); return
+            case .failed:
+                throw RecorderError.message("第 \(replay.id) 局未确认进入回放；短片已保留并标为未完成。请核对播放位置。")
+            case .retry:
+                status = "第 \(replay.id) 局尚未进入回放，复核同一收藏行后重试一次…"
+                try await sendPointerInput(replay.play, in: region, clickHoldMilliseconds: 250)
+            case .wait: break
+            }
+            if keepAlive.takeDue(at: now), try await sendPointerInput(UnitPoint(x: 0.78, y: 0.27), in: region, kind: .keepAlive) {
+                keepAliveCount += 1
+            }
+            try await Task.sleep(for: .seconds(1))
+        }
+    }
+
     private func preparePerspective(_ replay: inout Replay, region: CaptureRegion, video: URL,
-                                    originalHeaders: ReplayPlayerHeaders?, keepAlive: inout KeepAliveSchedule) async throws {
+                                    originalHeaders: inout ReplayPlayerHeaders?, keepAlive: inout KeepAliveSchedule) async throws {
         guard replay.preferredPerspective.requiresSwitch else {
             replay.perspectiveStatus = "replayDefault"
             return
@@ -502,6 +538,7 @@ final class AppModel: ObservableObject {
         var speedPrepared = !settings.speed2x
         var nextDiagnostic = 0.0
         var endingHits = 0
+        var progress = ReplayProgressHealth()
         var entryCheck = ReplayEntryCheck(startedAt: ProcessInfo.processInfo.systemUptime,
                                           graceSeconds: settings.loadingSeconds)
         while true {
@@ -540,8 +577,12 @@ final class AppModel: ObservableObject {
             }
             let ending = lines.contains { ["对局胜利", "对局失败"].contains($0.text.filter { !$0.isWhitespace }) } &&
                 lines.contains { $0.text.contains("退出观看") }
+            if let reason = progress.observe(pixels: ScreenRecorder.boardPixels(image),
+                                             playback: flow.waitingForPlayback ? controls.playback?.state : nil,
+                                             ending: ending, at: now) { throw RecorderError.message(reason) }
             endingHits = ending ? endingHits + 1 : 0
             if endingHits >= 2 {
+                originalHeaders = flow.orientationReference
                 replay.confirmedPerspective = flow.confirmedPerspective
                 replay.perspectiveStatus = replay.confirmedPerspective == .opponent ? "playerHeadersConfirmed" : "needsReview"
                 saveReplayMetadata(replay, at: video)
@@ -588,6 +629,7 @@ final class AppModel: ObservableObject {
                 addLog("已识别继续按钮，发送恢复播放点击")
                 try await sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
             case .finished:
+                originalHeaders = flow.orientationReference
                 replay.confirmedPerspective = flow.confirmedPerspective
                 replay.perspectiveStatus = flow.confirmedPerspective == .opponent ? "playerHeadersConfirmed" : "unverified"
                 saveReplayMetadata(replay, at: video)
@@ -691,20 +733,23 @@ final class AppModel: ObservableObject {
                             : "已用两次列表画面建立方向参照；牌手名字仅在本局内存中使用")
                     }
                     self.activeRow = replay.id; self.activePerspective = replay.preferredPerspective
+                    self.perspectiveVerified = !replay.preferredPerspective.requiresSwitch
                     self.status = "第 \(replay.id) 局 · \(replay.preferredPerspective.label)：进入回放（\(offset + 1)/\(batch.count) 段）"
                     let path = try self.outputURL(stem: replay.filename)
                     currentURL = path
+                    replay.recordingOutcome = "incomplete"
                     self.saveReplayMetadata(replay, at: path)
                     try await self.sendPointerInput(replay.play, in: region)
                     try await self.recorder.start(region: region.resolved(), url: path, audio: self.settings.systemAudio)
                     self.markRecordingStarted()
+                    self.status = "第 \(replay.id) 局：正在保存画面，等待确认进入回放…"
+                    try await self.confirmReplayEntry(replay, region: region, keepAlive: &keepAlive)
                     // Own takes never inspect menus, even in a mixed or two-pass batch.
                     if replay.preferredPerspective.requiresSwitch {
                         try await self.preparePerspective(&replay, region: region, video: path,
-                                                         originalHeaders: originalHeaders, keepAlive: &keepAlive)
+                                                         originalHeaders: &originalHeaders, keepAlive: &keepAlive)
                     }
                     else {
-                        try await Task.sleep(for: .seconds(self.settings.loadingSeconds))
                         let afterClick = try await self.recorder.screenshot(region: region.resolved())
                         let afterLines = try await Task.detached { try Metadata.text(in: afterClick) }.value
                         guard !afterLines.contains(where: { ReplayText.date($0.text) != nil }) else {
@@ -714,9 +759,14 @@ final class AppModel: ObservableObject {
                         replay.perspectiveStatus = "replayDefault"
                     }
                     self.saveReplayMetadata(replay, at: path)
-                    self.status = "正在录制第 \(replay.id) 局 · \(replay.preferredPerspective.label)（\(offset + 1)/\(batch.count) 段）"
+                    self.perspectiveVerified = !replay.preferredPerspective.requiresSwitch || replay.confirmedPerspective == .opponent
+                    self.status = "正在保存第 \(replay.id) 局画面 · \(self.perspectiveVerified ? replay.preferredPerspective.label : "对方视角未确认")（\(offset + 1)/\(batch.count) 段）"
                     var endHits = 0
                     var detectedExit: UnitPoint?
+                    var recovery = ReplayPlaybackRecovery()
+                    var progress = ReplayProgressHealth()
+                    var previousHeaders: ReplayPlayerHeaders?
+                    let replayStart = ProcessInfo.processInfo.systemUptime
                     while true {
                         try await Task.sleep(for: .seconds(5))
                         try self.recorder.checkFailure()
@@ -728,24 +778,56 @@ final class AppModel: ObservableObject {
                                 self.addLog("已发送云原神保活移动 · 第 \(self.keepAliveCount) 次")
                             }
                         }
-                        if self.elapsed < 60 { continue }
                         let screenshot = try await self.recorder.screenshot(region: region.resolved())
-                        let text = try await Task.detached { try Metadata.text(in: screenshot) }.value
+                        let resources = Bundle.main.resourceURL!
+                        let (text, controls) = try await Task.detached {
+                            (try Metadata.text(in: screenshot), try Metadata.playback(image: screenshot, resources: resources))
+                        }.value
                         let exit = text.first { $0.text.contains("退出观看") }
                         let ending = text.contains { $0.text.contains("对局胜利") || $0.text.contains("对局失败") }
+                        if replay.preferredPerspective.requiresSwitch, let reference = originalHeaders {
+                            let current = ReplayPlayerHeaders.detect(text, matching: reference)
+                            if let current, current == previousHeaders {
+                                let confirmed = current == reference.swapped
+                                if self.perspectiveVerified != confirmed {
+                                    self.perspectiveVerified = confirmed
+                                    replay.confirmedPerspective = confirmed ? .opponent : nil
+                                    replay.perspectiveStatus = confirmed ? "playerHeadersConfirmed" : "orientationLost"
+                                    self.saveReplayMetadata(replay, at: path)
+                                    self.status = confirmed ? "第 \(replay.id) 局：对方视角已复核，继续保存…" : "第 \(replay.id) 局：检测到视角回到己方，片段标记待核对，不盲目重复切换。"
+                                }
+                            }
+                            previousHeaders = current
+                        }
+                        let now = ProcessInfo.processInfo.systemUptime
+                        if let reason = progress.observe(pixels: ScreenRecorder.boardPixels(screenshot),
+                                                         playback: controls.playback?.state, ending: ending, at: now) {
+                            throw RecorderError.message(reason)
+                        }
+                        if !ending && !ReplayPerspectiveMenu.isOpen(text) {
+                            switch recovery.observe(controls.playback, at: now) {
+                            case .resume(let point):
+                                self.status = "第 \(replay.id) 局回放暂停，正在尝试继续；视频仍在保存…"
+                                try await self.sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
+                            case .finished: recovery = ReplayPlaybackRecovery()
+                            case .wait: break
+                            }
+                        }
+                        if now - replayStart < 5 { continue }
                         endHits = (exit != nil || self.calibration.exit != nil) && ending ? endHits + 1 : 0
                         if let exit { detectedExit = UnitPoint(x: exit.x + exit.width / 2, y: exit.y + exit.height / 2) }
                         if endHits == 1 { self.status = "第 \(replay.id) 局：检测到结束画面，正在复核…" }
                         if endHits >= 3 { break }
                     }
                     try await Task.sleep(for: .seconds(1.5))
-                    self.status = "第 \(replay.id) 局：正在保存视频…"
-                    try await self.recorder.stop()
+                    self.status = "第 \(replay.id) 局：正在保存游戏画面，完整窗口原片另行保留…"
+                    try await self.saveRecording(region: region, keepAlive: &keepAlive)
                     self.recording = false; self.startedAt = nil
+                    try await self.verifyRecording(path, detail: "第 \(replay.id) 局 · \(self.perspectiveVerified ? replay.preferredPerspective.label : "视角待核对")")
+                    replay.recordingOutcome = self.perspectiveVerified ? "complete" : "perspectiveUnconfirmed"
                     do {
                         try JSONEncoder().encode(replay).write(to: path.deletingPathExtension().appendingPathExtension("json"), options: .atomic)
                     } catch { self.addLog("初始角色信息保存失败，视频仍保留：\(error.localizedDescription)") }
-                    try await self.verifyRecording(path, detail: "第 \(replay.id) 局 · \(replay.preferredPerspective.label)")
                     if self.settings.autoReview { self.queueReview(path) }
                     currentURL = nil
                     if offset < batch.count - 1 {
@@ -755,8 +837,32 @@ final class AppModel: ObservableObject {
                         try await Task.sleep(for: .seconds(8))
                     }
                 }
-                self.status = "本批 \(batch.count) 段录制完成，保活已停止。"
+                self.status = "本批 \(batch.count) 段已保存，保活已停止；未确认视角的片段仍需核对。"
             } catch { await self.stopAfterError(error, url: currentURL) }
+        }
+    }
+
+    private func saveRecording(region: CaptureRegion, keepAlive: inout KeepAliveSchedule) async throws {
+        var completed = false
+        let saving = Task { @MainActor in
+            defer { completed = true }
+            try await self.recorder.stop()
+        }
+        do {
+            while !completed {
+                try Task.checkCancellation()
+                if keepAlive.takeDue(at: ProcessInfo.processInfo.systemUptime),
+                   try await sendPointerInput(UnitPoint(x: 0.78, y: 0.27), in: region, kind: .keepAlive) {
+                    keepAliveCount += 1
+                    addLog("导出期间保活 · 第 \(keepAliveCount) 次")
+                }
+                try await Task.sleep(for: .seconds(1))
+            }
+            try await saving.value
+        } catch {
+            // Stop input immediately, but never abandon the MP4 finalizer/exporter.
+            _ = try? await saving.value
+            throw error
         }
     }
 
@@ -920,7 +1026,8 @@ final class AppModel: ObservableObject {
                     case .favorites:
                         self.status = "已找到收藏对局，正在复核页面和播放按钮…"
                         try await Task.sleep(for: .seconds(1.5))
-                        let second = try await self.recorder.screenshot(region: region.resolved())
+                        let gameRegion = try await GameCaptureRegion.prepare(region, recorder: self.recorder)
+                        let second = try await self.recorder.screenshot(region: gameRegion.resolved())
                         let resources = Bundle.main.resourceURL!
                         let (nextLines, found) = try await Task.detached {
                             (try Metadata.text(in: second), try Metadata.scan(image: second, resources: resources))
@@ -934,6 +1041,7 @@ final class AppModel: ObservableObject {
                             throw RecorderError.message("收藏列表与上次勾选或人工角色修正不一致。已保留原选择，请重新识别并确认后开始。")
                         }
                         self.rows = restored
+                        self.region = gameRegion
                         guard !self.selectedRows.isEmpty else { throw RecorderError.message("没有勾选对局，尚未开始录制。") }
                         self.preview = NSImage(cgImage: second, size: .zero)
                         self.cloudLaunchPhase = .countdown
@@ -1104,17 +1212,24 @@ final class AppModel: ObservableObject {
     private func beginSession(region: CaptureRegion) throws {
         _ = try region.resolved()
         try session.begin()
+        lastSessionDiagnostic = ""
         sessionRunning = true; focusLostAt = nil; elapsed = 0; keepAliveCount = 0
         addLog(region.windowID == nil ? "区域录制：窗口失焦会保护性停止" : settings.unattended ? "全窗口无人值守：远程连接可断开，桌面必须保持解锁" : "全窗口录制：允许 15 秒暂时失焦")
-        addLog("录制期间已启用临时防睡眠；不会阻止主动锁屏")
+        addLog("录制电脑已启用临时防休眠和后台运行保护；不依赖观看端 MacBook 保持亮屏，不阻止主动锁屏或合盖")
         if settings.showHUD { hud.show(model: self, displayID: region.displayID) }
     }
 
     private func monitorSession() {
         if !session.unlocked { CloudAccountKeychain.clearSession() }
         guard sessionRunning, !stopping else { return }
+        let diagnostic = session.diagnostic(displayID: region?.displayID)
+        if diagnostic != lastSessionDiagnostic {
+            addLog("录制会话：\(diagnostic)")
+            lastSessionDiagnostic = diagnostic
+        }
         if keepAliveOnly {
             do {
+                try session.checkProtection()
                 guard session.unlocked, AXIsProcessTrusted() else { throw RecorderError.message("只保活已停止：桌面锁定、会话切换或辅助功能权限失效。") }
                 _ = try keepAliveTarget?.currentWindow()
             } catch {
@@ -1133,15 +1248,20 @@ final class AppModel: ObservableObject {
             addLog(settings.unattended && region.windowID != nil ? "目标暂时失焦，继续捕获指定窗口；点击前重新验证" : "目标应用暂时失焦")
         }
         do {
+            try session.checkProtection()
             if let reason = RecordingSafety.interruption(unlocked: session.unlocked, targetExists: app != nil && window != nil,
                                                         fullWindow: region.windowID != nil, unattended: settings.unattended,
                                                         focusLostSeconds: focusLostAt.map { Date().timeIntervalSince($0) } ?? 0) {
                 throw RecorderError.message(reason)
             }
             _ = try region.resolved()
-            if window?.onScreen == false { throw RecorderError.message("目标窗口已最小化或离开当前桌面。已保存片段，请还原窗口后重新开始。") }
-            if recording && recorder.isRecording { try recorder.checkFailure() }
+            if let window, RecordingSafety.unavailableWindow(onScreen: window.onScreen, minimized: window.minimized,
+                                                             fullWindow: region.windowID != nil, unattended: settings.unattended) {
+                throw RecorderError.message("目标窗口已最小化或区域不可见。已保存片段，请还原窗口后重新开始。")
+            }
+            if recording { try recorder.checkFailure() }
         } catch {
+            addLog("捕获中断：\(recorder.diagnostic)；\(diagnostic)")
             interruption = error; stopping = true
             status = "正在安全保存：\(error.localizedDescription)"
             operation?.cancel()
@@ -1215,7 +1335,7 @@ final class AppModel: ObservableObject {
         if cloudLaunchPhase == .recording { cloudLaunchPhase = .complete }
         if sessionRunning && settings.cloudKeepAlive { addLog("本批结束或停止：云原神保活与临时防睡眠已关闭") }
         sessionRunning = false; session.end(); hud.close(); focusLostAt = nil
-        busy = false; recording = false; keepAliveOnly = false; startedAt = nil; activeRow = nil; activePerspective = nil; operation = nil
+        busy = false; recording = false; keepAliveOnly = false; startedAt = nil; activeRow = nil; activePerspective = nil; perspectiveVerified = false; operation = nil
         stopping = false
         if session.unlocked { showWindow() }
     }

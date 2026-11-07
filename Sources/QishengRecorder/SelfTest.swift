@@ -5,6 +5,16 @@ import SwiftUI
 @MainActor
 func runSelfTest() {
     do {
+        let power = RecordingSession()
+        if power.unlocked {
+            try power.begin()
+            do { try power.checkProtection() } catch { power.end(); throw error }
+            power.end()
+            var released = false
+            do { try power.checkProtection() } catch { released = true }
+            guard released else { throw RecorderError.message("Temporary power assertions were not released") }
+            print("PASS: temporary display/system idle-sleep assertions acquired, checked and released locally")
+        } else { print("SKIP: local power assertion check requires an unlocked session") }
         try checkCredentialSessionReuse()
         try checkKeyboardEventPairs()
         let old = Data(#"{"outputDirectory":"/tmp/old-output","targetBundleID":"com.apple.Safari","speed2x":true,"profiles":{"12-1000x700":{"label":"external","speed":{"x":0.9,"y":0.8}}}}"#.utf8)

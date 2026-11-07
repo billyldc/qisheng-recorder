@@ -14,10 +14,10 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
     private var output: SCRecordingOutput?
     private var finished = false
     private var started = false
+    private var finalizing = false
     private var failure: Error?
-    private var lastFrameAt: Date?
-    private var unavailableSince: Date?
-    private var idleFrame = false
+    private var health = CaptureHealth(at: 0)
+    private var pendingCrop: (url: URL, normalized: CGRect)?
     var isRecording: Bool { stream != nil }
 
     private func context(region: CaptureRegion, audio: Bool) async throws -> (SCContentFilter, SCStreamConfiguration) {
@@ -39,7 +39,10 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
             filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
             config.sourceRect = region.sourceRect
         }
-        let size = RegionGeometry.outputSize(rect: region.sourceRect, scale: region.scale)
+        // Independent-window streams ignore sourceRect on supported macOS versions.
+        // Keep the full capture and crop its screenshots/export explicitly.
+        let captureRect = region.windowID != nil ? CGRect(origin: .zero, size: region.anchorFrame!.size) : region.sourceRect
+        let size = RegionGeometry.outputSize(rect: captureRect, scale: region.scale)
         config.width = Int(size.width)
         config.height = Int(size.height)
         config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
@@ -55,10 +58,15 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
 
     func screenshot(region: CaptureRegion) async throws -> CGImage {
         let (filter, config) = try await context(region: region, audio: false)
-        // Keep the original selected rectangle. The final recording uses the same rectangle.
-        config.width = Int(region.sourceRect.width * region.scale)
-        config.height = Int(region.sourceRect.height * region.scale)
-        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        let size = region.windowID != nil ? region.anchorFrame!.size : region.sourceRect.size
+        config.width = Int(size.width * region.scale)
+        config.height = Int(size.height * region.scale)
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        guard let crop = region.windowCrop else { return image }
+        let pixels = GameViewport.pointRect(pixelRect: crop, imageSize: size,
+                                           source: CGRect(x: 0, y: 0, width: image.width, height: image.height)).integral
+        guard let cropped = image.cropping(to: pixels) else { throw RecorderError.message("无法截取已确认的游戏区域。") }
+        return cropped
     }
 
     func start(region: CaptureRegion, url: URL, audio: Bool) async throws {
@@ -71,15 +79,21 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
         let recording = SCRecordingOutput(configuration: recordingConfig, delegate: self)
         let capture = SCStream(filter: filter, configuration: config, delegate: self)
         finished = false; started = false; failure = nil
-        lastFrameAt = Date(); unavailableSince = nil; idleFrame = false
+        pendingCrop = nil
+        if let crop = region.windowCrop, let frame = region.anchorFrame {
+            pendingCrop = (url, CGRect(x: crop.minX / frame.width, y: crop.minY / frame.height,
+                                      width: crop.width / frame.width, height: crop.height / frame.height))
+        }
+        health = CaptureHealth(at: ProcessInfo.processInfo.systemUptime)
         try capture.addStreamOutput(self, type: .screen, sampleHandlerQueue: .main)
         try capture.addRecordingOutput(recording)
         stream = capture; output = recording
         do {
             try await capture.startCapture()
-            for _ in 0..<100 {
+            for _ in 0..<150 {
                 if let failure { throw failure }
-                if started { return }
+                try checkFailure()
+                if started && health.hasWrittenMedia { return }
                 try await Task.sleep(for: .milliseconds(100))
             }
             throw RecorderError.message("录制未能开始。请检查屏幕录制权限后重新打开应用。")
@@ -92,7 +106,17 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
 
     func stop() async throws {
         // A cancelled automation task must still allow real time for MP4 finalization.
-        try await Task { @MainActor in try await self.finalize() }.value
+        try await Task { @MainActor in
+            self.finalizing = true
+            defer { self.finalizing = false }
+            try await self.finalize()
+            if let pending = self.pendingCrop {
+                self.pendingCrop = nil
+                if FileManager.default.fileExists(atPath: pending.url.path) {
+                    try await GameVideoExport.cropPreservingOriginal(pending.url, normalized: pending.normalized)
+                }
+            }
+        }.value
     }
 
     private func finalize() async throws {
@@ -114,13 +138,31 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
     }
 
     func checkFailure() throws {
+        if finalizing { return }
+        guard stream != nil else { throw RecorderError.message("录制流已丢失，已停止自动操作。") }
         if let failure { throw failure }
-        if let unavailableSince, Date().timeIntervalSince(unavailableSince) >= 8 {
-            throw RecorderError.message("捕获画面已暂停或变为空白。请还原目标窗口并检查桌面是否解锁；当前片段已保存。")
+        if finished && stream != nil {
+            throw RecorderError.message("视频输出意外结束，已停止后续操作；当前片段不计为完成。")
         }
-        if !idleFrame, let lastFrameAt, Date().timeIntervalSince(lastFrameAt) > 30 {
-            throw RecorderError.message("超过 30 秒没有收到捕获帧，已保存当前片段。请检查窗口及远程会话。")
-        }
+        let now = ProcessInfo.processInfo.systemUptime
+        if let output { health.written(duration: output.recordedDuration.seconds, bytes: output.recordedFileSize, at: now) }
+        if let reason = health.failure(at: now) { throw RecorderError.message(reason) }
+    }
+
+    var diagnostic: String {
+        let duration = output?.recordedDuration.seconds ?? 0
+        return "有效画面=\(health.hasFrame)，写入=\(duration.isFinite ? Int(duration) : 0)秒/\(output?.recordedFileSize ?? 0)字节"
+    }
+
+    static func boardPixels(_ image: CGImage) -> [UInt8] {
+        let rect = CGRect(x: Double(image.width) * 0.15, y: Double(image.height) * 0.25,
+                          width: Double(image.width) * 0.65, height: Double(image.height) * 0.50)
+        guard let board = image.cropping(to: rect),
+              let context = CGContext(data: nil, width: 64, height: 36, bitsPerComponent: 8, bytesPerRow: 64,
+                                      space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return [] }
+        context.draw(board, in: CGRect(x: 0, y: 0, width: 64, height: 36))
+        guard let data = context.data else { return [] }
+        return Array(UnsafeBufferPointer(start: data.assumingMemoryBound(to: UInt8.self), count: 64 * 36))
     }
     nonisolated func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen,
@@ -128,11 +170,9 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
               let raw = attachments.first?[.status] as? Int, let status = SCFrameStatus(rawValue: raw) else { return }
         Task { @MainActor in
             guard stream === self.stream else { return }
-            self.lastFrameAt = Date()
-            self.idleFrame = status == .idle
-            if status == .blank || status == .suspended || status == .stopped {
-                if self.unavailableSince == nil { self.unavailableSince = Date() }
-            } else { self.unavailableSince = nil }
+            let frame: CaptureHealth.Frame = status == .complete ? .complete :
+                (status == .idle || status == .started ? .idle : .unavailable)
+            self.health.frame(frame, at: ProcessInfo.processInfo.systemUptime)
         }
     }
     nonisolated func recordingOutputDidStartRecording(_ recordingOutput: SCRecordingOutput) {

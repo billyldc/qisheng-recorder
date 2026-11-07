@@ -24,6 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runSelfTest()
             return
         }
+        if CommandLine.arguments.contains("--crop-export-self-test") {
+            runCropExportSelfTest()
+            return
+        }
         if CommandLine.arguments.contains("--perspective-self-test") {
             runPerspectiveSelfTest()
             return

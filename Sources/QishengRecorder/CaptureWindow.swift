@@ -22,7 +22,7 @@ struct CaptureWindow: Identifiable {
         }
     }
 
-    func region() throws -> CaptureRegion {
+    func region(crop: CGRect? = nil) throws -> CaptureRegion {
         let screens = NSScreen.screens.compactMap { screen -> (screen: NSScreen, id: UInt32)? in
             guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else { return nil }
             return (screen, id)
@@ -32,9 +32,21 @@ struct CaptureWindow: Identifiable {
             throw RecorderError.message("窗口不在已连接的显示器上。")
         }
         let bounds = CGDisplayBounds(ids[index])
+        let local = crop ?? CGRect(origin: .zero, size: frame.size)
+        guard CGRect(origin: .zero, size: frame.size).contains(local), local.width >= 160, local.height >= 90 else {
+            throw RecorderError.message("游戏区域已超出窗口，请重新选择窗口。")
+        }
         return CaptureRegion(displayID: ids[index], displaySize: bounds.size,
-                             sourceRect: frame.offsetBy(dx: -bounds.minX, dy: -bounds.minY),
-                             scale: screens[index].screen.backingScaleFactor, windowID: id, anchorWindowID: id, anchorFrame: frame, anchorOwnerPID: ownerPID)
+                             sourceRect: local.offsetBy(dx: frame.minX - bounds.minX, dy: frame.minY - bounds.minY),
+                             scale: screens[index].screen.backingScaleFactor, windowID: id, anchorWindowID: id,
+                             anchorFrame: frame, anchorOwnerPID: ownerPID, windowCrop: crop)
+    }
+
+    var minimized: Bool {
+        guard let window = try? accessibilityWindow() else { return false }
+        var value: CFTypeRef?
+        return AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &value) == .success &&
+            (value as? NSNumber)?.boolValue == true
     }
 
     func raise() throws {

@@ -20,6 +20,7 @@ public struct Replay: Codable, Identifiable, Equatable, Sendable {
     public var recordingPerspective: ReplayPerspective?
     public var confirmedPerspective: ReplayPerspective?
     public var perspectiveStatus: String?
+    public var recordingOutcome: String?
     public var preferredPerspective: ReplayPerspective { recordingPerspective ?? .own }
     public init(id: Int, date: String, mode: String, left: [String], right: [String], play: UnitPoint) {
         self.id = id; self.date = date; self.mode = mode

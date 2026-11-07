@@ -70,6 +70,13 @@ enum SafariLauncher {
         return pages[0]
     }
 
+    static func cloudContentRect(_ window: CaptureWindow) -> CGRect? {
+        guard let page = cloudDocumentForKeepAlive(window), let rect = bounds(page) else { return nil }
+        let visible = rect.intersection(window.frame)
+        guard !visible.isEmpty, visible.width >= 320, visible.height >= 180 else { return nil }
+        return visible.offsetBy(dx: -window.frame.minX, dy: -window.frame.minY)
+    }
+
     static func pressStart(_ window: CaptureWindow) throws -> Bool {
         guard pageURL(window).map(CloudLaunchPolicy.allowed) == true else {
             throw RecorderError.message("当前标签页不是已确认的官方云原神页面，已暂停启动。")

@@ -14,6 +14,7 @@ public enum ReplayRecordingPlan {
             result.recordingPerspective = view
             result.confirmedPerspective = nil
             result.perspectiveStatus = nil
+            result.recordingOutcome = nil
             return result
         }
         if bothPerspectives {
@@ -211,6 +212,7 @@ public struct ReplayPerspectiveFlow {
     public private(set) var confirmedPerspective: ReplayPerspective?
     public private(set) var waitingForPlayback = false
     public var hasOrientationReference: Bool { originalHeaders != nil }
+    public var orientationReference: ReplayPlayerHeaders? { originalHeaders }
     private let desired: ReplayPerspective
     private var previousMenu: ReplayPerspectiveMenu?
     private var previousHeaders: ReplayPlayerHeaders?

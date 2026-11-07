@@ -16,6 +16,9 @@ public enum ClickSafety {
 }
 
 public enum RecordingSafety {
+    public static func unavailableWindow(onScreen: Bool, minimized: Bool, fullWindow: Bool, unattended: Bool) -> Bool {
+        minimized || (!onScreen && (!fullWindow || !unattended))
+    }
     // Window capture tolerates occlusion; display-region capture does not.
     public static func interruption(unlocked: Bool, targetExists: Bool, fullWindow: Bool,
                                     unattended: Bool, focusLostSeconds: Double) -> String? {
@@ -26,6 +29,28 @@ public enum RecordingSafety {
             return "目标应用离开前台超过 15 秒，已保存片段。无人值守录制需在开始前开启。"
         }
         return nil
+    }
+}
+
+public struct ReplayEntryGate {
+    public enum Action: Equatable { case wait, retry, entered, failed }
+    private let start: Double
+    private let grace: Double
+    private var replayHits = 0
+    private var listHits = 0
+    private var retryAt: Double?
+    public init(at now: Double, grace: Double) { start = now; self.grace = max(12, grace) }
+    public mutating func observe(listVisible: Bool, sameRow: Bool, playbackVisible: Bool, at now: Double) -> Action {
+        if now - start >= max(45, grace * 2 + 5) { return .failed }
+        replayHits = !listVisible && playbackVisible ? replayHits + 1 : 0
+        if replayHits >= 2 { return .entered }
+        listHits = listVisible && sameRow && !playbackVisible ? listHits + 1 : 0
+        if listHits >= 2 && now - (retryAt ?? start) >= grace {
+            guard retryAt == nil else { return .failed }
+            retryAt = now; listHits = 0
+            return .retry
+        }
+        return .wait
     }
 }
 

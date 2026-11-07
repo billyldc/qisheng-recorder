@@ -218,7 +218,7 @@ struct MainView: View {
                     Label("手动选框", systemImage: "viewfinder").tag(CaptureMode.region)
                     Label("全窗口", systemImage: "macwindow").tag(CaptureMode.window)
                 }.pickerStyle(.segmented).frame(maxWidth: 460).disabled(model.busy || model.selectionActive)
-                    .help("全窗口保留目标窗口的完整边界，不裁边；窗口中的浏览器工具栏也会保留。按游戏布局自动定位要求内容完整，识别失败可手动校准。")
+                    .help("全窗口会识别官方云原神内容区并裁去多帧一致的黑边；每局录完导出，完整原片保留在「原始窗口」子目录。无法确认时保留边缘或提示手动选框。")
                 if model.settings.captureMode == .region {
                     Picker("选框显示器", selection: $model.settings.captureDisplayID) {
                     Text("跟随游戏窗口").tag(Optional<UInt32>.none)
@@ -231,7 +231,7 @@ struct MainView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Toggle("无人值守", isOn: $model.settings.unattended).disabled(model.settings.captureMode != .window)
                         .help("仅适用于全窗口。失焦时继续捕获，点击或保活前恢复所选窗口。远程断开不能伴随锁屏或注销；真实锁屏仍会停止并保存。")
-                        controlNote("仅限全窗口；锁屏或注销仍会停止录制。")
+                        controlNote("防休眠在录制电脑上生效；锁屏、注销或合盖仍会停止。")
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     VStack(alignment: .leading, spacing: 4) {
                         Toggle("悬浮日志与停止按钮", isOn: $model.settings.showHUD)

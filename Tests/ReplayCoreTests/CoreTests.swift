@@ -52,6 +52,9 @@ final class CoreTests {
         tests.testKeepAliveAllowsOnlyUniqueSafariDocumentFallback()
         tests.testPerspectiveFlowSequences()
         tests.testEachReplayHasFreshEntryGrace()
+        checkRecordingReliability()
+        checkGameViewport()
+        try checkPrivateViewportFixtures()
         print("PASS: 39 geometry, metadata, file-safety, update, launch, perspective and recording-policy regression checks")
     }
 
