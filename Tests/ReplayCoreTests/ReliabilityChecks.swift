@@ -17,7 +17,7 @@ func checkRecordingReliability() {
     precondition(speed.observe(toolbar(1), menuOpen: false, at: 3) == .wait)
     precondition(speed.observe(toolbar(1), menuOpen: false, at: 7) == .click(speedPoint, attempt: 2))
     precondition(speed.observe(toolbar(1), menuOpen: false, at: 14) == .wait)
-    precondition(speed.observe(toolbar(1), menuOpen: false, at: 15) == .wait)
+    precondition(speed.observe(toolbar(1), menuOpen: false, at: 15) == .stillNormal)
     precondition(speed.observe(toolbar(2), menuOpen: false, at: 16) == .wait)
     precondition(speed.observe(toolbar(2), menuOpen: false, at: 17) == .confirmed)
     precondition(speed.observe(toolbar(2), menuOpen: false, at: 18) == .wait)

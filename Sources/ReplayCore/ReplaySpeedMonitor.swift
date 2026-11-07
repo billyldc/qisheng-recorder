@@ -3,7 +3,7 @@ import Foundation
 /// Retries only when fresh, stable toolbar evidence still shows normal speed.
 public struct ReplaySpeedMonitor {
     public enum Action: Equatable {
-        case wait, click(UnitPoint, attempt: Int), confirmed
+        case wait, click(UnitPoint, attempt: Int), confirmed, stillNormal
     }
 
     private let enabled: Bool
@@ -13,6 +13,7 @@ public struct ReplaySpeedMonitor {
     private var lastAttempt = -Double.infinity
     private var attempts = 0
     private var confirmed = false
+    private var warned = false
 
     public init(enabled: Bool, calibrated: UnitPoint? = nil) {
         self.enabled = enabled
@@ -44,6 +45,10 @@ public struct ReplaySpeedMonitor {
             return .confirmed
         }
         confirmed = false
+        if sample.multiplier == 1 && attempts >= 2 && now - lastAttempt >= 6 && !warned {
+            warned = true
+            return .stillNormal
+        }
         // An unknown calibrated control may be clicked once, but never blindly retried.
         guard attempts < 2, now - lastAttempt >= 6,
               sample.multiplier == 1 || attempts == 0 else { return .wait }

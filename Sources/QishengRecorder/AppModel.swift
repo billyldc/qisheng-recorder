@@ -532,6 +532,9 @@ final class AppModel: ObservableObject {
         case .confirmed:
             addLog("已连续确认二倍速")
             return false
+        case .stillNormal:
+            addLog("多次尝试后仍检测到正常速度，本局继续录制；请事后检查倍速。")
+            return false
         case .click(let point, let attempt):
             addLog(attempt == 1 ? "检测到回放控件，正在开启二倍速…" : "仍检测到正常速度，正在再次尝试二倍速…")
             try await sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
