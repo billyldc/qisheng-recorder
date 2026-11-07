@@ -742,7 +742,7 @@ final class AppModel: ObservableObject {
                     }
                     self.activeRow = replay.id; self.activePerspective = replay.preferredPerspective
                     self.perspectiveVerified = !replay.preferredPerspective.requiresSwitch
-                    var speed = ReplaySpeedMonitor(enabled: replay.preferredPerspective.requiresSwitch && self.settings.speed2x,
+                    var speed = ReplaySpeedMonitor(enabled: self.settings.speed2x,
                                                    calibrated: self.calibration.speed)
                     self.status = "第 \(replay.id) 局 · \(replay.preferredPerspective.label)：进入回放（\(offset + 1)/\(batch.count) 段）"
                     let path = try self.outputURL(stem: replay.filename)
@@ -765,7 +765,18 @@ final class AppModel: ObservableObject {
                         guard !afterLines.contains(where: { ReplayText.date($0.text) != nil }) else {
                             throw RecorderError.message("播放点击未进入回放。短片已保留，请校准这一局的播放位置后重试。")
                         }
-                        if self.settings.speed2x { try await self.setDoubleSpeed(region: region) }
+                        if self.settings.speed2x {
+                            for _ in 0..<3 {
+                                let image = try await self.recorder.screenshot(region: region.resolved())
+                                let resources = Bundle.main.resourceURL!
+                                let (text, controls) = try await Task.detached {
+                                    (try Metadata.text(in: image), try Metadata.playback(image: image, resources: resources))
+                                }.value
+                                if try await self.maintainDoubleSpeed(&speed, lines: text, controls: controls, region: region,
+                                                                      at: ProcessInfo.processInfo.systemUptime) { break }
+                                try await Task.sleep(for: .milliseconds(700))
+                            }
+                        }
                         replay.perspectiveStatus = "replayDefault"
                     }
                     self.saveReplayMetadata(replay, at: path)
@@ -814,7 +825,7 @@ final class AppModel: ObservableObject {
                                                          playback: controls.playback?.state, ending: ending, at: now) {
                             throw RecorderError.message(reason)
                         }
-                        if !ending && replay.preferredPerspective.requiresSwitch {
+                        if !ending && self.settings.speed2x {
                             _ = try await self.maintainDoubleSpeed(&speed, lines: text, controls: controls, region: region, at: now)
                         }
                         if !ending && !ReplayPerspectiveMenu.isOpen(text) {
@@ -1280,43 +1291,6 @@ final class AppModel: ObservableObject {
             operation?.cancel()
             Metadata.cancelOperation()
         }
-    }
-
-    private func setDoubleSpeed(region: CaptureRegion) async throws {
-        status = "正在确认二倍速控件…"
-        var control: ReplaySpeedControl?
-        for _ in 0..<(calibration.speed == nil ? 3 : 1) {
-            let image = try await recorder.screenshot(region: region.resolved())
-            let resources = Bundle.main.resourceURL!
-            do { control = try await Task.detached { try Metadata.speed(image: image, resources: resources) }.value }
-            catch {
-                try Task.checkCancellation()
-                addLog("倍速识别暂不可用，将优先使用手动校准坐标。")
-                break
-            }
-            try Task.checkCancellation()
-            if control != nil { break }
-            try await Task.sleep(for: .seconds(1))
-        }
-        let action = SpeedPolicy.action(detected: control, calibrated: calibration.speed)
-        if action == .alreadyDouble { addLog("已确认当前为二倍速，无需点击"); return }
-        guard case .click(let point) = action else {
-            addLog("未能定位二倍速，保持当前速度继续录制。可在下次录制前手动校准。")
-            return
-        }
-        status = "正在切换二倍速…"
-        try await sendPointerInput(point, in: region)
-        for _ in 0..<2 {
-            try await Task.sleep(for: .seconds(1))
-            let image = try await recorder.screenshot(region: region.resolved())
-            let resources = Bundle.main.resourceURL!
-            let verified: ReplaySpeedControl?
-            do { verified = try await Task.detached { try Metadata.speed(image: image, resources: resources) }.value }
-            catch { try Task.checkCancellation(); break }
-            try Task.checkCancellation()
-            if verified?.multiplier == 2 { addLog("已确认二倍速"); return }
-        }
-        addLog("已点击一次二倍速，图像识别未确认；保持当前速度继续录制，不重复点击。")
     }
 
     func stop() {

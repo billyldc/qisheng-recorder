@@ -12,7 +12,9 @@ public struct ReplaySpeedMonitor {
     private var previousAt: Double?
     private var lastAttempt = -Double.infinity
     private var attempts = 0
+    private var totalAttempts = 0
     private var confirmed = false
+    private var hasConfirmed = false
     private var warned = false
 
     public init(enabled: Bool, calibrated: UnitPoint? = nil) {
@@ -42,17 +44,21 @@ public struct ReplaySpeedMonitor {
         if sample.multiplier == 2 {
             guard !confirmed else { return .wait }
             confirmed = true
+            hasConfirmed = true
+            attempts = 0
+            warned = false
             return .confirmed
         }
         confirmed = false
-        if sample.multiplier == 1 && attempts >= 2 && now - lastAttempt >= 6 && !warned {
+        if sample.multiplier == 1 && (attempts >= 2 || totalAttempts >= 4) && now - lastAttempt >= 6 && !warned {
             warned = true
             return .stillNormal
         }
         // An unknown calibrated control may be clicked once, but never blindly retried.
-        guard attempts < 2, now - lastAttempt >= 6,
-              sample.multiplier == 1 || attempts == 0 else { return .wait }
+        guard attempts < 2, totalAttempts < 4, now - lastAttempt >= 6,
+              sample.multiplier == 1 || (totalAttempts == 0 && !hasConfirmed) else { return .wait }
         attempts += 1
+        totalAttempts += 1
         lastAttempt = now
         previous = nil; previousAt = nil
         return .click(calibrated ?? sample.point, attempt: attempts)
