@@ -525,8 +525,23 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func maintainDoubleSpeed(_ monitor: inout ReplaySpeedMonitor, lines: [TextLine],
+                                     controls: ReplayPlaybackControls, region: CaptureRegion, at now: Double) async throws -> Bool {
+        switch monitor.observe(controls, menuOpen: ReplayPerspectiveMenu.isOpen(lines), at: now) {
+        case .wait: return false
+        case .confirmed:
+            addLog("已连续确认二倍速")
+            return false
+        case .click(let point, let attempt):
+            addLog(attempt == 1 ? "检测到回放控件，正在开启二倍速…" : "仍检测到正常速度，正在再次尝试二倍速…")
+            try await sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
+            return true
+        }
+    }
+
     private func preparePerspective(_ replay: inout Replay, region: CaptureRegion, video: URL,
-                                    originalHeaders: inout ReplayPlayerHeaders?, keepAlive: inout KeepAliveSchedule) async throws {
+                                    originalHeaders: inout ReplayPlayerHeaders?, keepAlive: inout KeepAliveSchedule,
+                                    speed: inout ReplaySpeedMonitor) async throws {
         guard replay.preferredPerspective.requiresSwitch else {
             replay.perspectiveStatus = "replayDefault"
             return
@@ -535,7 +550,6 @@ final class AppModel: ObservableObject {
         saveReplayMetadata(replay, at: video)
         status = "第 \(replay.id) 局：等待掷骰结束、牌桌菜单出现，再暂停并切换对方视角…"
         var flow = ReplayPerspectiveFlow(desired: replay.preferredPerspective, originalHeaders: originalHeaders)
-        var speedPrepared = !settings.speed2x
         var nextDiagnostic = 0.0
         var endingHits = 0
         var progress = ReplayProgressHealth()
@@ -562,18 +576,9 @@ final class AppModel: ObservableObject {
             if entryCheck.failed(listVisible: lines.contains(where: { ReplayText.date($0.text) != nil }), at: now) {
                 throw RecorderError.message("播放点击未进入回放。短片已保留，请校准这一局的播放位置后重试。")
             }
-            if !speedPrepared, controls.playback != nil {
-                // Share the first verified toolbar observation; do not delay the
-                // perspective menu for a separate speed-confirmation loop.
-                speedPrepared = true
-                let action = SpeedPolicy.action(detected: controls.speed, calibrated: calibration.speed)
-                if case .click(let point) = action {
-                    status = "回放控件已出现，点击二倍速；等待牌桌菜单出现后暂停切换视角…"
-                    try await sendPointerInput(point, in: region)
-                    try await Task.sleep(for: .milliseconds(250))
-                    continue
-                }
-                if action == .alreadyDouble { addLog("已确认当前为二倍速，无需点击") }
+            if try await maintainDoubleSpeed(&speed, lines: lines, controls: controls, region: region, at: now) {
+                try await Task.sleep(for: .milliseconds(250))
+                continue
             }
             let ending = lines.contains { ["对局胜利", "对局失败"].contains($0.text.filter { !$0.isWhitespace }) } &&
                 lines.contains { $0.text.contains("退出观看") }
@@ -734,6 +739,8 @@ final class AppModel: ObservableObject {
                     }
                     self.activeRow = replay.id; self.activePerspective = replay.preferredPerspective
                     self.perspectiveVerified = !replay.preferredPerspective.requiresSwitch
+                    var speed = ReplaySpeedMonitor(enabled: replay.preferredPerspective.requiresSwitch && self.settings.speed2x,
+                                                   calibrated: self.calibration.speed)
                     self.status = "第 \(replay.id) 局 · \(replay.preferredPerspective.label)：进入回放（\(offset + 1)/\(batch.count) 段）"
                     let path = try self.outputURL(stem: replay.filename)
                     currentURL = path
@@ -747,7 +754,7 @@ final class AppModel: ObservableObject {
                     // Own takes never inspect menus, even in a mixed or two-pass batch.
                     if replay.preferredPerspective.requiresSwitch {
                         try await self.preparePerspective(&replay, region: region, video: path,
-                                                         originalHeaders: &originalHeaders, keepAlive: &keepAlive)
+                                                         originalHeaders: &originalHeaders, keepAlive: &keepAlive, speed: &speed)
                     }
                     else {
                         let afterClick = try await self.recorder.screenshot(region: region.resolved())
@@ -803,6 +810,9 @@ final class AppModel: ObservableObject {
                         if let reason = progress.observe(pixels: ScreenRecorder.boardPixels(screenshot),
                                                          playback: controls.playback?.state, ending: ending, at: now) {
                             throw RecorderError.message(reason)
+                        }
+                        if !ending && replay.preferredPerspective.requiresSwitch {
+                            _ = try await self.maintainDoubleSpeed(&speed, lines: text, controls: controls, region: region, at: now)
                         }
                         if !ending && !ReplayPerspectiveMenu.isOpen(text) {
                             switch recovery.observe(controls.playback, at: now) {

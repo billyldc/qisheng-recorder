@@ -3,6 +3,46 @@ import ReplayCore
 import ImageIO
 
 func checkRecordingReliability() {
+    let speedPoint = UnitPoint(x: 0.94, y: 0.91)
+    let playPoint = UnitPoint(x: 0.88, y: 0.91)
+    func toolbar(_ multiplier: Int?, state: ReplayPlaybackControl.State = .running,
+                 point: UnitPoint? = nil, visible: Bool = true) -> ReplayPlaybackControls {
+        ReplayPlaybackControls(gear: nil, playback: ReplayPlaybackControl(point: playPoint, state: state),
+            speed: visible ? ReplaySpeedControl(point: point ?? speedPoint, multiplier: multiplier) : nil)
+    }
+    var speed = ReplaySpeedMonitor(enabled: true)
+    precondition(speed.observe(toolbar(1), menuOpen: false, at: 0) == .wait)
+    precondition(speed.observe(toolbar(1), menuOpen: false, at: 1) == .click(speedPoint, attempt: 1))
+    precondition(speed.observe(toolbar(1), menuOpen: false, at: 2) == .wait)
+    precondition(speed.observe(toolbar(1), menuOpen: false, at: 3) == .wait)
+    precondition(speed.observe(toolbar(1), menuOpen: false, at: 7) == .click(speedPoint, attempt: 2))
+    precondition(speed.observe(toolbar(1), menuOpen: false, at: 14) == .wait)
+    precondition(speed.observe(toolbar(1), menuOpen: false, at: 15) == .wait)
+    precondition(speed.observe(toolbar(2), menuOpen: false, at: 16) == .wait)
+    precondition(speed.observe(toolbar(2), menuOpen: false, at: 17) == .confirmed)
+    precondition(speed.observe(toolbar(2), menuOpen: false, at: 18) == .wait)
+    var alreadyFast = ReplaySpeedMonitor(enabled: true)
+    precondition(alreadyFast.observe(toolbar(2), menuOpen: false, at: 0) == .wait)
+    precondition(alreadyFast.observe(toolbar(2), menuOpen: false, at: 1) == .confirmed)
+    var manual = ReplaySpeedMonitor(enabled: true, calibrated: speedPoint)
+    precondition(manual.observe(toolbar(nil, visible: false), menuOpen: false, at: 0) == .wait)
+    precondition(manual.observe(toolbar(nil, visible: false), menuOpen: false, at: 1) == .click(speedPoint, attempt: 1))
+    precondition(manual.observe(toolbar(nil, visible: false), menuOpen: false, at: 10) == .wait)
+    precondition(manual.observe(toolbar(nil, visible: false), menuOpen: false, at: 11) == .wait)
+    precondition(manual.observe(toolbar(1), menuOpen: false, at: 12) == .wait)
+    precondition(manual.observe(toolbar(1), menuOpen: false, at: 13) == .click(speedPoint, attempt: 2))
+    var guarded = ReplaySpeedMonitor(enabled: true)
+    precondition(guarded.observe(toolbar(1), menuOpen: true, at: 0) == .wait)
+    precondition(guarded.observe(toolbar(1, state: .paused), menuOpen: false, at: 1) == .wait)
+    precondition(guarded.observe(toolbar(1), menuOpen: false, at: 2) == .wait)
+    precondition(guarded.observe(toolbar(2), menuOpen: false, at: 3) == .wait)
+    precondition(guarded.observe(toolbar(1, point: UnitPoint(x: .nan, y: 0.9)), menuOpen: false, at: 4) == .wait)
+    precondition(guarded.observe(toolbar(1), menuOpen: false, at: 5) == .wait)
+    precondition(guarded.observe(toolbar(1), menuOpen: false, at: 5) == .wait)
+    var off = ReplaySpeedMonitor(enabled: false)
+    precondition(off.observe(toolbar(1), menuOpen: false, at: 0) == .wait)
+    precondition(off.observe(toolbar(1), menuOpen: false, at: 1) == .wait)
+
     var idle = CaptureHealth(at: 0)
     idle.frame(.complete, at: 1)
     idle.written(duration: 1, bytes: 100, at: 1)
@@ -67,7 +107,7 @@ func checkRecordingReliability() {
     precondition(RecordingSafety.unavailableWindow(onScreen: false, minimized: true, fullWindow: true, unattended: true))
     precondition(RecordingSafety.unavailableWindow(onScreen: false, minimized: false, fullWindow: false, unattended: true))
     precondition(RecordingSafety.unavailableWindow(onScreen: false, minimized: false, fullWindow: true, unattended: false))
-    print("PASS: capture callbacks, stalled writer, blank recovery, entry evidence/retry, paused/frozen replay, remote window visibility")
+    print("PASS: speed confirmation and bounded retry, capture callbacks, stalled writer, blank recovery, entry evidence/retry, paused/frozen replay, remote window visibility")
 }
 
 func checkGameViewport() {
