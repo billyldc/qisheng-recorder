@@ -13,7 +13,7 @@ func runTavernSelfTest() {
         switch args[index + 2] {
         case "worldCropped": lines = try Metadata.worldNavigationText(in: image, arrival: false)
         case "worldArrival": lines = try Metadata.worldNavigationText(in: image, arrival: true)
-        case "worldFull", "princePrompt": lines = try Metadata.cloudNavigationText(in: image)
+        case "worldFull", "princePrompt", "princeGreeting", "princeUnknown": lines = try Metadata.cloudNavigationText(in: image)
         default: lines = try Metadata.text(in: image)
         }
         let result: Bool
@@ -23,6 +23,8 @@ func runTavernSelfTest() {
         case "worldArrival": result = TavernNavigationEvidence.princeNearby(lines)
         case "worldFull": result = TavernNavigationEvidence.worldVisible(lines)
         case "princePrompt": result = CloudLaunchPolicy.state(lines) == .prince
+        case "princeGreeting": result = CloudLaunchPolicy.state(lines) == .princeGreeting && CloudLaunchPolicy.confirmedPrinceGreetingPoint(lines, lines) != nil
+        case "princeUnknown": result = CloudLaunchPolicy.state(lines) == .unknown && CloudLaunchPolicy.hasPrinceSpeaker(lines)
         case "regions": result = TavernNavigationEvidence.regionPoint(lines) != nil
         case "cityInitial": result = TavernNavigationEvidence.isMondstadtMap(lines) && GameViewport.rgba(image).flatMap { TavernMapZoom.point(rgba: $0, width: image.width, height: image.height) } != nil
         case "city": result = TavernNavigationEvidence.isMondstadtMap(lines) && TavernNavigationEvidence.clusterPoint(lines, width: image.width, height: image.height) != nil && GameViewport.rgba(image).flatMap { TavernMapZoom.point(rgba: $0, width: image.width, height: image.height) } != nil

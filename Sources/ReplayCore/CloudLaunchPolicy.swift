@@ -85,6 +85,29 @@ public enum CloudLaunchPolicy {
         return b
     }
 
+    /// Retry a cropped game frame without overriding any recognized whole-window state.
+    public static func useCroppedPrincePage(_ whole: [TextLine], cropped: [TextLine]) -> Bool {
+        guard state(whole) == .unknown else { return false }
+        switch state(cropped) {
+        case .princeGreeting: return princeChoices(whole).isEmpty
+        case .princeDialogue: return true
+        default: return false
+        }
+    }
+
+    public static func hasPrinceSpeaker(_ lines: [TextLine]) -> Bool {
+        lines.contains {
+            compact($0.text) == "小王子" && (0.35...0.65).contains($0.x) && (0.60...0.88).contains($0.y)
+        }
+    }
+
+    public static func confirmedPrinceGreetingPoint(_ first: [TextLine], _ second: [TextLine]) -> UnitPoint? {
+        guard state(first) == .princeGreeting, state(second) == .princeGreeting,
+              let a = princeGreetingPoint(first), let b = princeGreetingPoint(second),
+              abs(a.x - b.x) < 0.025, abs(a.y - b.y) < 0.025 else { return nil }
+        return b
+    }
+
     public static func recentTabKeyPoint(_ lines: [TextLine]) -> UnitPoint? {
         guard state(lines) == .recentReplays else { return nil }
         let headings = lines.filter { $0.x < 0.5 && $0.y < 0.45 }
@@ -160,11 +183,15 @@ public enum CloudLaunchPolicy {
         // Before the choices appear, the game waits at the Prince's greeting.
         // Require the dialogue controls and the bottom-centred speaker name;
         // the floating NPC label in the world is never enough to click.
+        guard princeChoices(lines).isEmpty else { return nil }
         let speakers = lines.filter {
             compact($0.text) == "小王子" && (0.35...0.65).contains($0.x) && (0.60...0.88).contains($0.y)
         }
         guard let speaker = uniquePoint(speakers, labels: ["小王子"]),
-              lines.contains(where: { compact($0.text) == "自动" && $0.x < 0.2 && $0.y < 0.35 }) else { return nil }
+              lines.contains(where: {
+                  ["自动", "自动目"].contains(compact($0.text)) && $0.x < 0.2 && $0.y < 0.35 &&
+                  $0.width > 0 && $0.width < 0.15 && $0.height > 0 && $0.height < 0.08
+              }) else { return nil }
         let speech = lines.filter {
             $0.width > 0.25 && $0.height < 0.08 && $0.x < 0.6 &&
             $0.y > speaker.y && $0.y < min(0.94, speaker.y + 0.16) && compact($0.text).count >= 8

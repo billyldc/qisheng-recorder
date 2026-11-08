@@ -247,11 +247,28 @@ final class CoreTests {
         XCTAssertEqual(CloudLaunchPolicy.state([speaker, auto, speech]), .princeGreeting)
         XCTAssertEqual(CloudLaunchPolicy.navigationPoint([speaker, auto, speech]), UnitPoint(x: 0.51, y: 0.8324999999999999))
         XCTAssertEqual(CloudLaunchPolicy.state([speaker, speech]), .unknown)
+        XCTAssertEqual(CloudLaunchPolicy.state([speaker, line("自动目", 0.055, 0.153), speech]), .princeGreeting)
+        XCTAssertEqual(CloudLaunchPolicy.state([speaker, line("自动寻路", 0.055, 0.153), speech]), .unknown)
         XCTAssertEqual(CloudLaunchPolicy.state([auto, speech]), .unknown)
         XCTAssertEqual(CloudLaunchPolicy.state([line("小王子", 0.46, 0.28), auto, speech]), .unknown)
         XCTAssertEqual(CloudLaunchPolicy.state([speaker, auto]), .unknown)
         XCTAssertEqual(CloudLaunchPolicy.state([speaker, auto, speech, line("观看一下对局回放。", 0.65, 0.6, 0.2)]), .princeDialogue)
         XCTAssertEqual(CloudLaunchPolicy.state([speaker, auto, speech, line("验证码", 0.5, 0.5)]), .login)
+        let greeting = [speaker, auto, speech]
+        XCTAssertEqual(CloudLaunchPolicy.hasPrinceSpeaker(greeting), true)
+        XCTAssertEqual(CloudLaunchPolicy.confirmedPrinceGreetingPoint(greeting, greeting), CloudLaunchPolicy.navigationPoint(greeting))
+        var moved = speech; moved.y += 0.05
+        XCTAssertNil(CloudLaunchPolicy.confirmedPrinceGreetingPoint(greeting, [speaker, auto, moved]))
+        XCTAssertNil(CloudLaunchPolicy.confirmedPrinceGreetingPoint(greeting, [speaker, auto]))
+        XCTAssertEqual(CloudLaunchPolicy.useCroppedPrincePage([speaker], cropped: greeting), true)
+        XCTAssertFalse(CloudLaunchPolicy.useCroppedPrincePage([line("验证码", 0.5, 0.5)], cropped: greeting))
+        XCTAssertFalse(CloudLaunchPolicy.useCroppedPrincePage(greeting, cropped: greeting))
+        let singleChoice = line("查询牌手等级", 0.68, 0.4, 0.18)
+        XCTAssertFalse(CloudLaunchPolicy.useCroppedPrincePage([speaker, singleChoice], cropped: greeting))
+        XCTAssertFalse(CloudLaunchPolicy.useCroppedPrincePage([speaker], cropped: [speaker, auto]))
+        XCTAssertEqual(CloudLaunchPolicy.state(greeting + [singleChoice]), .unknown)
+        XCTAssertNil(CloudLaunchPolicy.confirmedPrinceGreetingPoint(greeting, greeting + [singleChoice]))
+        XCTAssertNil(CloudLaunchPolicy.confirmedPrinceGreetingPoint(greeting, greeting + [line("验证码", 0.5, 0.5)]))
     }
 
     func testPrincePromptSupportsMergedIconsAndLocalKey() {
@@ -305,7 +322,7 @@ final class CoreTests {
         XCTAssertNil(CloudLaunchPolicy.navigationPoint(greeting + choices))
         XCTAssertNil(CloudLaunchPolicy.confirmedPrinceReplayPoint(greeting + choices, greeting + choices))
         var unrelated = choices[1]; unrelated.x = 0.1
-        XCTAssertEqual(CloudLaunchPolicy.state(greeting + [choices[0], unrelated]), .princeGreeting)
+        XCTAssertEqual(CloudLaunchPolicy.state(greeting + [choices[0], unrelated]), .unknown)
         XCTAssertEqual(CloudLaunchPolicy.state(greeting + choices + [TextLine(text: "验证码", x: 0.4, y: 0.4, width: 0.1, height: 0.03)]), .login)
     }
 

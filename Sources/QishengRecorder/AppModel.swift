@@ -1076,6 +1076,7 @@ final class AppModel: ObservableObject {
                 var attemptedMapNavigation = false
                 var nextWorldProbe = 0.0
                 var princeInteractionSentAt: Double?
+                var unconfirmedPrinceGreetings = 0
                 while Date() < deadline {
                     try Task.checkCancellation()
                     guard self.session.unlocked else { throw RecorderError.message("桌面已锁定，启动已暂停。") }
@@ -1083,9 +1084,32 @@ final class AppModel: ObservableObject {
                         throw RecorderError.message("Safari 已离开云原神标签页，请切回官方页面后继续检查。")
                     }
                     let image = try await self.recorder.screenshot(region: region.resolved())
-                    let lines = try await Task.detached { try Metadata.cloudNavigationText(in: image) }.value
+                    var lines = try await Task.detached { try Metadata.cloudNavigationText(in: image) }.value
                     try Task.checkCancellation()
-                    let state = CloudLaunchPolicy.state(lines)
+                    var state = CloudLaunchPolicy.state(lines)
+                    var navigationRegion = region
+                    var navigationPage: CGRect?
+                    if state == .unknown && (princeInteractionSentAt != nil || CloudLaunchPolicy.hasPrinceSpeaker(lines)),
+                       let page = SafariLauncher.cloudContentRect(window) {
+                        do {
+                            let gameRegion = try await GameCaptureRegion.prepare(region, recorder: self.recorder)
+                            let gameImage = try await self.recorder.screenshot(region: gameRegion.resolved())
+                            let gameLines = try await Task.detached { try Metadata.cloudNavigationText(in: gameImage) }.value
+                            try Task.checkCancellation()
+                            if let current = SafariLauncher.cloudContentRect(window),
+                               GameViewport.samePageBounds(page, current),
+                               CloudLaunchPolicy.useCroppedPrincePage(lines, cropped: gameLines) {
+                                navigationRegion = gameRegion
+                                navigationPage = page
+                                lines = gameLines
+                                state = CloudLaunchPolicy.state(gameLines)
+                            }
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            self.addLog("小王子对话画面暂未稳定，将继续检查。")
+                        }
+                    }
                     switch princeDialogueGuard.observe(state, at: ProcessInfo.processInfo.systemUptime) {
                     case .proceed:
                         break
@@ -1244,7 +1268,7 @@ final class AppModel: ObservableObject {
                         }
                         self.status = "已进入小王子选项，正在复核“观看一下对局回放”…"
                         try await Task.sleep(for: .milliseconds(450))
-                        let secondImage = try await self.recorder.screenshot(region: region.resolved())
+                        let secondImage = try await self.recorder.screenshot(region: navigationRegion.resolved())
                         let secondLines = try await Task.detached { try Metadata.cloudNavigationText(in: secondImage) }.value
                         try Task.checkCancellation()
                         let secondState = CloudLaunchPolicy.state(secondLines)
@@ -1260,13 +1284,42 @@ final class AppModel: ObservableObject {
                         try await self.hud.hideForClick()
                         do {
                             self.status = "已连续确认回放选项，正在点击“观看一下对局回放”…"
-                            try await self.sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
+                            try await self.sendPointerInput(point, in: navigationRegion, clickHoldMilliseconds: 250) {
+                                if let page = navigationPage {
+                                    guard let current = SafariLauncher.cloudContentRect(window), GameViewport.samePageBounds(page, current) else {
+                                        throw RecorderError.message("游戏区域在确认对话选项后改变，尚未点击。")
+                                    }
+                                }
+                            }
                         } catch { self.hud.restore(); throw error }
                         self.hud.restore()
                         actions[state] = count + 1
                         princeDialogueGuard.replayClickSent(at: ProcessInfo.processInfo.systemUptime)
                         try await Task.sleep(for: .seconds(4))
-                    case .launcher, .gameEntry, .prince, .princeGreeting, .recentReplays, .replayEnd:
+                    case .princeGreeting:
+                        let count = actions[state, default: 0]
+                        guard count < 3, unconfirmedPrinceGreetings < 10 else {
+                            throw RecorderError.message("小王子的首句对白未能稳定推进，已停止；没有盲选其他对话。")
+                        }
+                        self.status = "已看到小王子的首句对白，正在复核后推进；不会重复按 F…"
+                        try await Task.sleep(for: .milliseconds(450))
+                        let secondImage = try await self.recorder.screenshot(region: navigationRegion.resolved())
+                        let secondLines = try await Task.detached { try Metadata.cloudNavigationText(in: secondImage) }.value
+                        guard let point = CloudLaunchPolicy.confirmedPrinceGreetingPoint(lines, secondLines) else {
+                            unconfirmedPrinceGreetings += 1
+                            continue
+                        }
+                        try await self.sendPointerInput(point, in: navigationRegion, clickHoldMilliseconds: 250) {
+                            if let page = navigationPage {
+                                guard let current = SafariLauncher.cloudContentRect(window), GameViewport.samePageBounds(page, current) else {
+                                    throw RecorderError.message("游戏区域在确认对白后改变，尚未点击。")
+                                }
+                            }
+                        }
+                        actions[state] = count + 1
+                        unconfirmedPrinceGreetings = 0
+                        try await Task.sleep(for: .seconds(4))
+                    case .launcher, .gameEntry, .prince, .recentReplays, .replayEnd:
                         let count = actions[state, default: 0]
                         guard count < 3 else {
                             throw RecorderError.message("在“\(state.rawValue)”页面尝试 3 次后未进入下一步，已停止；没有开始录制。请检查页面提示后继续。")

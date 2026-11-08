@@ -6,8 +6,8 @@
   <key>CFBundleIdentifier</key><string>io.github.billyldc.QishengRecorder</string>
   <key>CFBundleExecutable</key><string>QishengRecorder</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleVersion</key><string>30</string>
-  <key>CFBundleShortVersionString</key><string>1.6.5</string>
+  <key>CFBundleVersion</key><string>31</string>
+  <key>CFBundleShortVersionString</key><string>1.6.6</string>
   <key>QishengUpdateRepository</key><string>billyldc/qisheng-recorder</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>
