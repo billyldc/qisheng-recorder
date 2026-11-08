@@ -206,6 +206,18 @@ struct MainView: View {
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
+                        Text("一键启动默认视角")
+                        Picker("一键启动默认视角", selection: $model.settings.autoStartPerspective) {
+                            ForEach(ReplayPerspective.allCases, id: \.self) { perspective in
+                                Text(perspective.label).tag(perspective)
+                            }
+                        }.labelsHidden().pickerStyle(.segmented).frame(width: 200)
+                            .disabled(model.settings.bothPerspectives || model.busy || model.selectionActive)
+                    }
+                    controlNote(model.settings.bothPerspectives
+                                ? "双方视角录制已开启，此设置暂不生效。"
+                                : "仅用于一键启动后新识别的对局；下方开始录制仍保留每局手动选择。")
+                    HStack {
                         Button(action: model.launchSafariAndRecord) {
                             Label(model.cloudLaunchPhase.needsUser ? "继续检查并录制" : "启动 Safari 并录制", systemImage: "safari")
                         }.disabled(!model.ready || model.busy || model.selectionActive || model.editingReviewVideo != nil)

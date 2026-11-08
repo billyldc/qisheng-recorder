@@ -210,8 +210,15 @@ public enum CloudLaunchPolicy {
     }
 
     /// Preserve deliberate checkboxes and manually corrected characters only when identities match.
-    public static func restoringChoices(_ previous: [Replay], in found: [Replay]) -> [Replay]? {
-        guard !previous.isEmpty else { return found }
+    public static func restoringChoices(_ previous: [Replay], in found: [Replay], freshPerspective: ReplayPerspective = .own) -> [Replay]? {
+        guard !previous.isEmpty else {
+            guard freshPerspective != .own else { return found }
+            return found.map { item in
+                var result = item
+                result.recordingPerspective = freshPerspective
+                return result
+            }
+        }
         let hasChoices = previous.contains { !$0.selected || $0.preferredPerspective != .own || $0.manualCharacters?.contains(true) == true }
         let old = Dictionary(grouping: previous, by: { $0.date + "|" + $0.mode })
         let new = Dictionary(grouping: found, by: { $0.date + "|" + $0.mode })

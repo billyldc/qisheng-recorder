@@ -351,7 +351,12 @@ final class CoreTests {
         XCTAssertNil(CloudLaunchPolicy.restoringChoices([old], in: [old, old]))
         old.selected = true; old.manualCharacters = nil
         XCTAssertEqual(CloudLaunchPolicy.restoringChoices([old], in: [fresh]), [fresh])
-        XCTAssertEqual(CloudLaunchPolicy.restoringChoices([], in: [fresh]), [fresh])
+        XCTAssertEqual(CloudLaunchPolicy.restoringChoices([], in: [fresh])?.first?.preferredPerspective, .own)
+        XCTAssertEqual(CloudLaunchPolicy.restoringChoices([], in: [fresh], freshPerspective: .opponent)?.first?.preferredPerspective, .opponent)
+        old.recordingPerspective = .own
+        XCTAssertEqual(CloudLaunchPolicy.restoringChoices([old], in: [old], freshPerspective: .opponent)?.first?.preferredPerspective, .own)
+        old.recordingPerspective = .opponent
+        XCTAssertEqual(CloudLaunchPolicy.restoringChoices([old], in: [old], freshPerspective: .own)?.first?.preferredPerspective, .opponent)
     }
 
     func testCloudStartRequiresUniqueVisibleExactLabel() {

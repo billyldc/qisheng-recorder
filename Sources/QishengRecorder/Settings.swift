@@ -12,6 +12,7 @@ struct Settings: Codable {
     var systemAudio = true
     var speed2x = false
     var bothPerspectives = false
+    var autoStartPerspective = ReplayPerspective.own
     var loadingSeconds = 12.0
     var maxSeconds = 1200.0
     var profiles: [String: Calibration] = [:]
@@ -28,7 +29,7 @@ struct Settings: Codable {
 
     init() {}
     enum CodingKeys: String, CodingKey {
-        case outputDirectory, targetBundleID, captureDisplayID, systemAudio, speed2x, bothPerspectives
+        case outputDirectory, targetBundleID, captureDisplayID, systemAudio, speed2x, bothPerspectives, autoStartPerspective
         case loadingSeconds, maxSeconds, profiles, captureMode, unattended, showHUD, legacyCalibrationBundleID
         case cloudKeepAlive, keepAliveSeconds
         case autoReview, autoAssetUpdates
@@ -43,6 +44,7 @@ struct Settings: Codable {
         systemAudio = try values.decodeIfPresent(Bool.self, forKey: .systemAudio) ?? systemAudio
         speed2x = try values.decodeIfPresent(Bool.self, forKey: .speed2x) ?? speed2x
         bothPerspectives = try values.decodeIfPresent(Bool.self, forKey: .bothPerspectives) ?? bothPerspectives
+        autoStartPerspective = try values.decodeIfPresent(ReplayPerspective.self, forKey: .autoStartPerspective) ?? autoStartPerspective
         loadingSeconds = try values.decodeIfPresent(Double.self, forKey: .loadingSeconds) ?? loadingSeconds
         maxSeconds = try values.decodeIfPresent(Double.self, forKey: .maxSeconds) ?? maxSeconds
         profiles = try values.decodeIfPresent([String: Calibration].self, forKey: .profiles) ?? profiles

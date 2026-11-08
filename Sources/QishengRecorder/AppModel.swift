@@ -1221,7 +1221,9 @@ final class AppModel: ObservableObject {
                         guard CloudLaunchPolicy.verified(lines, nextLines, rows: found) else {
                             throw RecorderError.message("收藏列表或播放按钮尚未稳定确认。请检查当前页面后继续，或使用原来的手动录制入口。")
                         }
-                        guard let restored = CloudLaunchPolicy.restoringChoices(previousRows, in: found) else {
+                        guard let restored = CloudLaunchPolicy.restoringChoices(
+                            previousRows, in: found, freshPerspective: self.settings.autoStartPerspective
+                        ) else {
                             self.rows = previousRows
                             throw RecorderError.message("收藏列表与上次勾选或人工角色修正不一致。已保留原选择，请重新识别并确认后开始。")
                         }

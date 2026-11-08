@@ -20,7 +20,8 @@ func runSelfTest() {
         let old = Data(#"{"outputDirectory":"/tmp/old-output","targetBundleID":"com.apple.Safari","speed2x":true,"profiles":{"12-1000x700":{"label":"external","speed":{"x":0.9,"y":0.8}}}}"#.utf8)
         let migrated = try JSONDecoder().decode(Settings.self, from: old)
         guard migrated.outputDirectory == "/tmp/old-output", migrated.targetBundleID == "com.apple.Safari",
-              migrated.speed2x, !migrated.bothPerspectives, migrated.captureMode == .region, !migrated.unattended, migrated.showHUD,
+              migrated.speed2x, !migrated.bothPerspectives, migrated.autoStartPerspective == .own,
+              migrated.captureMode == .region, !migrated.unattended, migrated.showHUD,
               migrated.cloudKeepAlive, migrated.keepAliveSeconds == 60,
               migrated.legacyCalibrationBundleID == "com.apple.Safari", !migrated.cloudAutoLogin, !migrated.cloudAutoAcceptAgreements,
               migrated.profiles["12-1000x700"]?.speed == UnitPoint(x: 0.9, y: 0.8) else {
@@ -31,8 +32,9 @@ func runSelfTest() {
         guard !roundTrip.cloudKeepAlive, roundTrip.keepAliveSeconds == 75 else { throw RecorderError.message("Keep-alive preferences not preserved") }
         let invalid = try JSONDecoder().decode(Settings.self, from: Data(#"{"keepAliveSeconds":1e90}"#.utf8))
         guard invalid.keepAliveSeconds == 60 else { throw RecorderError.message("Invalid keep-alive interval was not normalized") }
-        var views = Settings(); views.bothPerspectives = true
-        guard try JSONDecoder().decode(Settings.self, from: JSONEncoder().encode(views)).bothPerspectives else {
+        var views = Settings(); views.bothPerspectives = true; views.autoStartPerspective = .opponent
+        let decodedViews = try JSONDecoder().decode(Settings.self, from: JSONEncoder().encode(views))
+        guard decodedViews.bothPerspectives, decodedViews.autoStartPerspective == .opponent else {
             throw RecorderError.message("Both-perspective preference was not preserved")
         }
         let idle = AppModel(persistent: false)
