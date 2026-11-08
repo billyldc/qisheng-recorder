@@ -6,7 +6,7 @@
 
 [安装包](https://github.com/billyldc/qisheng-recorder/releases) · [快速上手](#快速上手) · [常见问题](#常见问题) · [反馈问题](https://github.com/billyldc/qisheng-recorder/issues)
 
-> 当前正在准备 1.6.2 测试版，尚未完成完整实机验收。录制和识别功能保留；双视角合成仍是实验脚本，尚未接入应用。
+> 当前公开版本为 **1.6.6**。推荐先打开「收藏对局」再开始录制；从其他地点自动导航、长期云游戏保活仍需留意运行状态。双视角合成仍是实验脚本，尚未接入应用。详见[本版说明](docs/RELEASE-1.6.6.md)。
 
 ## 可以做什么
 
@@ -22,7 +22,7 @@
 
 需要 **macOS 15 或更新版本，以及 Apple 芯片的 Mac（M 系列）**。目前不提供 Windows 或 Intel Mac 安装包。
 
-1. 正式版发布后，在[下载页面](https://github.com/billyldc/qisheng-recorder/releases)下载附件中的 **`.dmg`**。不要选 `Source code`，那是源代码。
+1. 在[下载页面](https://github.com/billyldc/qisheng-recorder/releases/latest)下载附件中的 **`.dmg`**。不要选 `Source code`，那是源代码。
 2. 打开安装包，把 **Qisheng Recorder** 拖入「应用程序」，然后从那里启动。
 3. 按「首次设置」提示，开启 **屏幕与系统音频录制** 和 **辅助功能**。前者用于录屏和录音，后者用于点击回放按钮。
 4. 选择游戏所在的应用和视频保存位置。默认保存在个人文件夹的「影片 → 七圣召唤」。
@@ -97,7 +97,7 @@ macOS 首次询问钥匙串访问时，输入该钥匙串密码并选择「始�
 
 ### 怎么更新应用？
 
-优先点击侧栏或应用菜单中的「检查更新」，在原位置完成更新。当前入口使用 GitHub CLI；仓库私有期间，需要本机已登录且有仓库访问权限。检查更新不会自动安装，需要你确认。正式安装包也会放在[下载页面](https://github.com/billyldc/qisheng-recorder/releases)。
+优先点击侧栏或应用菜单中的「检查更新」，在原位置完成更新。当前版本的应用内更新仍需要本机安装并登录 GitHub CLI；没有配置时，可以直接从[下载页面](https://github.com/billyldc/qisheng-recorder/releases/latest)获取安装包，不需要仓库访问授权。检查更新不会自动安装，需要你确认。
 
 此仓库与其他开发仓库独立发行；更新只检查本仓库的正式版，不会安装实验分支或候选版。系统是否沿用授权仍取决于签名和 macOS，不承诺更新后绝不再询问。
 
