@@ -120,6 +120,16 @@ extension CoreTests {
         let observedOpponent = ReplayPlayerHeaders.detect(playerHeaders(.opponent))!
         precondition(observedOwn.perspective(relativeTo: misreadReference) == .own)
         precondition(observedOpponent.perspective(relativeTo: misreadReference) == .opponent)
+        let row = favoriteRow()
+        let opponentOnly = ReplayPlayerHeaders.fromFavorites([row[0], row[2]], date: date, play: play)!
+        let ownOnly = ReplayPlayerHeaders.fromFavorites([row[0], row[1]], date: date, play: play)!
+        precondition(ReplayPlayerHeaders.fromFavorites([row[0]], date: date, play: play) == nil)
+        precondition(ReplayPlayerHeaders.fromFavorites([row[0], row[2], row[2]], date: date, play: play) == nil)
+        for partial in [opponentOnly, ownOnly] {
+            precondition(observedOwn.perspective(relativeTo: partial) == .own)
+            precondition(observedOpponent.perspective(relativeTo: partial) == .opponent)
+            precondition(opponentOnly.perspective(relativeTo: partial) == nil)
+        }
         var unrelated = playerHeaders(.own)
         unrelated[0].text = "otherA"; unrelated[2].text = "otherB"
         precondition(ReplayPlayerHeaders.detect(unrelated)?.perspective(relativeTo: misreadReference) == nil)
@@ -127,6 +137,25 @@ extension CoreTests {
         var misreadFlow = ReplayPerspectiveFlow(desired: .opponent, originalHeaders: misreadReference)
         let running = ReplayPlaybackControls(gear: .init(x: 0.97, y: 0.12),
             playback: .init(point: .init(x: 0.87, y: 0.9), state: .running))
+        var partialWithoutEvidence = ReplayPerspectiveFlow(desired: .opponent, originalHeaders: opponentOnly)
+        for second in 0..<5 {
+            precondition(partialWithoutEvidence.observe(lines: [], controls: running, at: Double(second)) == .wait,
+                         "An incomplete list reference must not trigger a blind switch")
+        }
+        var pausedAfterOwnEvidence = false
+        for second in 5..<10 {
+            if case .pause = partialWithoutEvidence.observe(lines: playerHeaders(.own), controls: running, at: Double(second)) {
+                pausedAfterOwnEvidence = true
+                break
+            }
+        }
+        precondition(pausedAfterOwnEvidence, "Stable own headers allow a partial list reference to proceed")
+        var partialFlow = ReplayPerspectiveFlow(desired: .opponent, originalHeaders: opponentOnly)
+        precondition(partialFlow.observe(lines: playerHeaders(.opponent), controls: running, at: 0) == .wait)
+        precondition(partialFlow.confirmedPerspective == nil)
+        precondition(partialFlow.observe(lines: playerHeaders(.opponent), controls: running, at: 1) == .wait)
+        precondition(partialFlow.confirmedPerspective == .opponent)
+        precondition(partialFlow.observe(lines: playerHeaders(.opponent), controls: running, at: 2) == .finished)
         precondition(misreadFlow.observe(lines: playerHeaders(.opponent), controls: running, at: 0) == .wait)
         precondition(misreadFlow.observe(lines: playerHeaders(.opponent), controls: running, at: 1) == .wait)
         precondition(misreadFlow.confirmedPerspective == .opponent)

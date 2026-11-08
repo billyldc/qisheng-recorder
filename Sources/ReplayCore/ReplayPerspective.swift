@@ -128,13 +128,17 @@ public struct ReplayPlayerHeaders: Equatable {
     public let top: String
     public let bottom: String
     public var swapped: Self { Self(top: bottom, bottom: top) }
+    fileprivate var isComplete: Bool { !top.isEmpty && !bottom.isEmpty }
 
     /// Both observed headers must be readable; one exact, unambiguous name match
     /// is enough when the other name was misread in the favorites list.
     public func perspective(relativeTo reference: Self) -> ReplayPerspective? {
-        guard top != bottom, reference.top != reference.bottom else { return nil }
-        let original = top == reference.top || bottom == reference.bottom
-        let reversed = top == reference.bottom || bottom == reference.top
+        guard !top.isEmpty, !bottom.isEmpty, top != bottom,
+              (!reference.top.isEmpty || !reference.bottom.isEmpty), reference.top != reference.bottom else { return nil }
+        let original = (!reference.top.isEmpty && top == reference.top) ||
+            (!reference.bottom.isEmpty && bottom == reference.bottom)
+        let reversed = (!reference.bottom.isEmpty && top == reference.bottom) ||
+            (!reference.top.isEmpty && bottom == reference.top)
         guard original != reversed else { return nil }
         return original ? .own : .opponent
     }
@@ -153,6 +157,7 @@ public struct ReplayPlayerHeaders: Equatable {
     // Names are only an in-memory orientation reference, never replay metadata.
     public static func fromFavorites(_ lines: [TextLine], date: String, play: UnitPoint) -> Self? {
         guard play.x.isFinite, play.y.isFinite, (0...1).contains(play.x), (0...1).contains(play.y) else { return nil }
+        guard lines.allSatisfy({ [$0.x, $0.y, $0.width, $0.height].allSatisfy(\.isFinite) }) else { return nil }
         let local = lines.filter(valid)
         let dates = local.filter { ReplayText.date($0.text) == date && abs($0.y - play.y) < 0.15 }
         guard dates.count == 1 else { return nil }
@@ -163,9 +168,10 @@ public struct ReplayPlayerHeaders: Equatable {
         }
         let own = names.filter { $0.x + $0.width < anchor.x - 0.02 }
         let opponent = names.filter { $0.x > anchor.x + anchor.width + 0.02 && $0.x + $0.width < play.x - 0.04 }
-        guard own.count == 1, opponent.count == 1 else { return nil }
-        let top = normalized(opponent[0].text), bottom = normalized(own[0].text)
-        guard !top.isEmpty, !bottom.isEmpty, top != bottom else { return nil }
+        guard own.count <= 1, opponent.count <= 1 else { return nil }
+        let top = opponent.first.map { normalized($0.text) } ?? ""
+        let bottom = own.first.map { normalized($0.text) } ?? ""
+        guard (!top.isEmpty || !bottom.isEmpty), top != bottom else { return nil }
         return Self(top: top, bottom: bottom)
     }
 
@@ -227,6 +233,7 @@ public struct ReplayPerspectiveFlow {
     private var previousMenu: ReplayPerspectiveMenu?
     private var previousHeaders: ReplayPlayerHeaders?
     private var originalHeaders: ReplayPlayerHeaders?
+    private var observedOriginalOrientation = false
     private var switchRequested = false
     private var switchAt = 0.0
     private var recovery = ReplayPlaybackRecovery()
@@ -249,9 +256,11 @@ public struct ReplayPerspectiveFlow {
         previousHeaders = headers
         if !switchRequested && originalHeaders == nil { originalHeaders = stableHeaders }
         if let originalHeaders, stableHeaders?.perspective(relativeTo: originalHeaders) == .opponent {
+            observedOriginalOrientation = false
             confirmedPerspective = desired
         }
         if let originalHeaders, stableHeaders?.perspective(relativeTo: originalHeaders) == .own {
+            observedOriginalOrientation = true
             confirmedPerspective = nil
         }
         if let gear = controls.gear { menuGear = gear }
@@ -325,7 +334,7 @@ public struct ReplayPerspectiveFlow {
             }
             if confirmedPerspective == desired { return .finished }
             if let originalHeaders, stableHeaders?.perspective(relativeTo: originalHeaders) == .own, now - switchAt >= 8 {
-                // Retry only when both player names still occupy their original sides.
+                // Retry only when stable player headers still establish the original orientation.
                 switchRequested = false
             } else {
                 // Keep observing while recording, instead of abandoning verification
@@ -333,8 +342,8 @@ public struct ReplayPerspectiveFlow {
                 return .wait
             }
         }
-        guard originalHeaders != nil else { return .wait }
-        if let originalHeaders, headers?.perspective(relativeTo: originalHeaders) == .opponent { return .wait }
+        guard let originalHeaders, originalHeaders.isComplete || observedOriginalOrientation else { return .wait }
+        if headers?.perspective(relativeTo: originalHeaders) == .opponent { return .wait }
         switch pausePreparation.observe(controls, at: now) {
         case .wait: return .wait
         case .pause(let point): return .pause(point)
