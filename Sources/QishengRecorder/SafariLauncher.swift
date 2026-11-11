@@ -378,8 +378,8 @@ enum SafariLauncher {
 }
 
 enum CloudLaunchPhase: String {
-    case idle, opening, checking, login, needsFavorites, countdown, recording, complete, cancelled
-    var needsUser: Bool { self == .login || self == .needsFavorites }
+    case idle, opening, checking, login, navigationHelp, needsFavorites, countdown, recording, complete, cancelled
+    var needsUser: Bool { self == .login || self == .needsFavorites || self == .navigationHelp }
 }
 
 enum SafariLoginResult { case submitted, needsAgreement, needsManualSubmit }

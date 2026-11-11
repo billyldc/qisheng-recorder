@@ -202,7 +202,7 @@ struct MainView: View {
                         .disabled(model.busy || model.selectionActive)
                     controlNote(model.settings.bothPerspectives
                                 ? "先录全部已选对局的己方视角，再录全部对方视角（己方 1–n → 对方 1–n）；共 \(model.selectedRows.count * 2) 段。每局单独选择暂不生效，关闭后恢复。"
-                                : "关闭时按每局选择的视角录一次；开启后录两轮，录完第二轮才停止本批保活。")
+                                : "关闭时可逐局选己方、对方或双方；只录勾选的对局。需要补录时，取消勾选其他对局即可。")
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
@@ -222,15 +222,26 @@ struct MainView: View {
                             Label(model.cloudLaunchPhase.needsUser ? "继续检查并录制" : "启动 Safari 并录制", systemImage: "safari")
                         }.disabled(!model.ready || model.busy || model.selectionActive || model.editingReviewVideo != nil)
                         if model.cloudLaunchPhase == .login { Label("等待登录或验证码", systemImage: "person.badge.key").foregroundStyle(.orange) }
-                        else if model.cloudLaunchPhase == .needsFavorites { Label("需要进入收藏列表", systemImage: "hand.raised").foregroundStyle(.orange) }
+                        else if model.cloudLaunchPhase == .needsFavorites || model.cloudLaunchPhase == .navigationHelp {
+                            Label("等待协助，任务未退出", systemImage: "hand.raised").foregroundStyle(.orange)
+                        }
                     }
-                    controlNote("Safari 的“开始录制”会先登录并启动游戏；游戏画面可识别时尝试通过地图前往猫尾酒馆，再与小王子对话并切到收藏。无法确认地图或遇到验证码时会停止并提示。自动密码登录和协议设置分别开启；本批导航和录制期间保活，结束或停止时关闭。上方入口录当前页全部对局，下方保留已勾选对局和人工角色修正，不翻页。")
+                    controlNote("先登录并启动游戏，再识别小王子和收藏列表。室外进入酒馆的路线尚未验证，需要手动进入；任务会等待，确认入口后继续，不会猜测地图坐标。验证码仍需手动完成。上方入口使用当前页全部对局，下方入口保留每局勾选、视角及角色修正。")
+                    if let message = model.assistanceMessage {
+                        HStack(alignment: .top) {
+                            Text(message).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                            Spacer()
+                            Button(action: model.continueAutomation) { Label("恢复窗口并继续", systemImage: "play.fill") }
+                                .help("只恢复所选窗口，再重新识别；不会补发旧点击或关闭未知弹窗。")
+                        }
+                    }
                 }
                 Picker("录制范围", selection: $model.settings.captureMode) {
                     Label("手动选框", systemImage: "viewfinder").tag(CaptureMode.region)
                     Label("全窗口", systemImage: "macwindow").tag(CaptureMode.window)
                 }.pickerStyle(.segmented).frame(maxWidth: 460).disabled(model.busy || model.selectionActive)
                     .help("全窗口会识别官方云原神内容区并裁去多帧一致的黑边；每局录完导出，完整原片保留在「原始窗口」子目录。无法确认时保留边缘或提示手动选框。")
+                controlNote("全窗口捕获可抵抗其他窗口遮挡。手动选框严格保留所选范围，需要保持前台；不会为了抗遮挡多录窗口其他区域。")
                 if model.settings.captureMode == .region {
                     Picker("选框显示器", selection: $model.settings.captureDisplayID) {
                     Text("跟随游戏窗口").tag(Optional<UInt32>.none)
@@ -243,7 +254,7 @@ struct MainView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Toggle("无人值守", isOn: $model.settings.unattended).disabled(model.settings.captureMode != .window)
                         .help("仅适用于全窗口。失焦时继续捕获，点击或保活前恢复所选窗口。远程断开不能伴随锁屏或注销；真实锁屏仍会停止并保存。")
-                        controlNote("防休眠在录制电脑上生效；锁屏、注销或合盖仍会停止。")
+                        controlNote("独立窗口失焦不中止；此开关决定是否自动恢复窗口以输入。锁屏、注销或合盖仍会停止。")
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     VStack(alignment: .leading, spacing: 4) {
                         Toggle("悬浮日志与停止按钮", isOn: $model.settings.showHUD)
@@ -251,6 +262,20 @@ struct MainView: View {
                         controlNote("不进入录像；关闭主窗口不会停止录制。")
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.toggleStyle(.checkbox).disabled(model.busy || model.selectionActive)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Toggle("录制期间消息免打扰", isOn: $model.settings.quietNotifications)
+                            .toggleStyle(.checkbox).disabled(model.busy || model.selectionActive)
+                        if model.quietRecoveryAvailable && !model.busy {
+                            Button(action: model.recoverNotificationSettings) {
+                                Label("恢复消息设置", systemImage: "bell.badge")
+                            }
+                        }
+                    }
+                    controlNote("开录前开启系统勿扰，录完或停止后恢复。已有专注模式时保留原模式和定时计划；系统允许的联系人、App 和紧急提醒仍可能出现。")
+                    controlNote("若系统开启专注模式跨设备共享，勿扰也会同步到其他设备；不会自动更改该设置。意外退出后可在这里恢复。")
+                    if !model.notificationQuietStatus.isEmpty { controlNote(model.notificationQuietStatus) }
+                }
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 12) {
                         Button(action: model.chooseKeepAliveWindow) { Label("校准保活页面", systemImage: "scope") }
@@ -323,13 +348,22 @@ struct MainView: View {
                 Divider()
                 HStack {
                     Text("收藏对局").font(.headline)
-                    Text("\(model.selectedRows.count) 局已选").foregroundStyle(.secondary)
+                    Text("\(model.selectedRows.count) 局已选 · \(ReplayRecordingPlan.jobs(rows: model.rows, bothPerspectives: model.settings.bothPerspectives).count) 段").foregroundStyle(.secondary)
                     Spacer()
                     Button(action: model.addManualRow) { Label("添加", systemImage: "plus") }.disabled(model.busy)
                 }
                 ForEach($model.rows) { $row in
                     ReplayRow(row: $row, active: model.activeRow == row.id, bothPerspectives: model.settings.bothPerspectives) { model.calibrate("play", rowID: row.id) }
                         .disabled(model.busy || model.selectionActive)
+                }
+                if model.pendingScanRows != nil {
+                    HStack {
+                        Text("本次识别与原列表不同，尚未覆盖你的选择。")
+                            .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button(action: model.useNewScanResults) { Label("使用本次识别结果", systemImage: "arrow.triangle.2.circlepath") }
+                            .disabled(model.busy).help("会替换旧列表；需要重新核对勾选、逐局视角及角色修正。")
+                    }
                 }
                 HStack {
                     controlNote(model.settings.cloudKeepAlive
@@ -433,13 +467,18 @@ private struct ReplayRow: View {
                 Button(action: calibrate) { Image(systemName: "scope") }.help("校准本局播放按钮")
             }
             HStack(spacing: 10) {
-                Picker("录制视角", selection: Binding(get: { row.preferredPerspective }, set: { row.recordingPerspective = $0 })) {
-                    ForEach(ReplayPerspective.allCases, id: \.self) { view in Text(view.label).tag(view) }
-                }.pickerStyle(.segmented).frame(width: 280).disabled(bothPerspectives)
+                Picker("录制视角", selection: Binding(get: { row.preferredRecordingChoice }, set: { row.recordingChoice = $0 })) {
+                    ForEach(ReplayRecordingChoice.allCases, id: \.self) { view in Text(view.label).tag(view) }
+                }.pickerStyle(.segmented).frame(width: 330).disabled(bothPerspectives)
                 if bothPerspectives {
                     Text("己方不检查菜单；对方持续等待切换，开头可能含等待时的己方画面").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text(row.preferredPerspective == .opponent ? "掷骰后先暂停，再切换并继续播放；暂不可切换会恢复播放后重试，开头可能仍是己方" : "默认己方视角，不暂停、不检查切换菜单").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(row.preferredRecordingChoice == .both
+                         ? "本局保存两段：先录本批所需己方，再录所需对方；不补录未勾选的对局"
+                         : row.preferredRecordingChoice == .opponent
+                         ? "掷骰后先暂停，再切换并继续播放；暂不可切换会恢复播放后重试，开头可能仍是己方"
+                         : "默认己方视角，不暂停、不检查切换菜单")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             HStack(spacing: 8) {

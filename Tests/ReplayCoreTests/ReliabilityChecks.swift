@@ -132,7 +132,7 @@ func checkRecordingReliability() {
     precondition(!RecordingSafety.unavailableWindow(onScreen: false, minimized: false, fullWindow: true, unattended: true))
     precondition(RecordingSafety.unavailableWindow(onScreen: false, minimized: true, fullWindow: true, unattended: true))
     precondition(RecordingSafety.unavailableWindow(onScreen: false, minimized: false, fullWindow: false, unattended: true))
-    precondition(RecordingSafety.unavailableWindow(onScreen: false, minimized: false, fullWindow: true, unattended: false))
+    precondition(!RecordingSafety.unavailableWindow(onScreen: false, minimized: false, fullWindow: true, unattended: false))
     print("PASS: speed confirmation and bounded retry, capture callbacks, stalled writer, blank recovery, entry evidence/retry, paused/frozen replay, remote window visibility")
 }
 

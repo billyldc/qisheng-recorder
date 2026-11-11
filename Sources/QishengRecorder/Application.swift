@@ -24,6 +24,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runSelfTest()
             return
         }
+        if CommandLine.arguments.contains("--quiet-self-test") {
+            runNotificationQuietSelfTest()
+            return
+        }
+        if CommandLine.arguments.contains("--capture-resilience-self-test") {
+            runCaptureResilienceSelfTest()
+            return
+        }
         if CommandLine.arguments.contains("--crop-export-self-test") {
             runCropExportSelfTest()
             return

@@ -16,7 +16,7 @@ final class RecordingHUD {
         } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1000, height: 700)
         let width = min(380.0, visible.width - 24)
-        let frame = CGRect(x: visible.minX + 12, y: visible.minY + 12, width: width, height: 238)
+        let frame = CGRect(x: visible.minX + 12, y: visible.minY + 12, width: width, height: 280)
         let panel = HUDPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .popUpMenu
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -53,7 +53,7 @@ private struct RecordingHUDView: View {
             HStack {
                 Image(systemName: "record.circle.fill").foregroundStyle(model.recording ? .red : .orange)
                 Text(model.keepAliveOnly ? "只保活" : model.activeRow.map {
-                    "第 \($0) 局 · \(model.perspectiveVerified ? model.activePerspective?.label ?? "" : "视角待确认")"
+                    "第 \($0) 局 · \(!model.replayConfirmed ? "回放待确认" : model.perspectiveVerified ? model.activePerspective?.label ?? "" : "视角待确认")"
                 } ?? "七圣召唤录制器").font(.headline)
                 Spacer()
                 Text(String(format: "%02d:%02d", model.elapsed / 60, model.elapsed % 60)).monospacedDigit()
@@ -65,6 +65,10 @@ private struct RecordingHUDView: View {
                     Text(entry).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }.frame(height: 49, alignment: .topLeading)
+            if model.assistanceMessage != nil {
+                Button(action: model.continueAutomation) { Label("恢复窗口并继续", systemImage: "play.fill") }
+                    .help("恢复窗口后重新识别，不点击未知弹窗，不补发旧坐标。")
+            }
             HStack {
                 Label(model.keepAliveOnly ? "未录制" : "不进入录像", systemImage: "eye.slash").font(.caption).foregroundStyle(.secondary)
                 Spacer()

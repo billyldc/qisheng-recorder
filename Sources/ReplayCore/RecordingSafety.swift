@@ -17,7 +17,7 @@ public enum ClickSafety {
 
 public enum RecordingSafety {
     public static func unavailableWindow(onScreen: Bool, minimized: Bool, fullWindow: Bool, unattended: Bool) -> Bool {
-        minimized || (!onScreen && (!fullWindow || !unattended))
+        minimized || (!onScreen && !fullWindow)
     }
     // Window capture tolerates occlusion; display-region capture does not.
     public static func interruption(unlocked: Bool, targetExists: Bool, fullWindow: Bool,
@@ -25,25 +25,36 @@ public enum RecordingSafety {
         if !unlocked { return "桌面已锁定或用户会话已切换。当前片段已保存；解锁后返回收藏列表重新开始。" }
         if !targetExists { return "目标窗口已关闭。当前片段已保存，请重新选择窗口。" }
         if focusLostSeconds > 0 && !fullWindow { return "区域录制的目标已离开前台。已保存片段；无人值守请使用全窗口模式。" }
-        if fullWindow && !unattended && focusLostSeconds >= 15 {
-            return "目标应用离开前台超过 15 秒，已保存片段。无人值守录制需在开始前开启。"
-        }
+        // Independent-window capture tolerates focus changes; CaptureHealth
+        // still requires real frames and growing encoded output.
         return nil
     }
 }
 
 public struct ReplayEntryGate {
     public enum Action: Equatable { case wait, retry, entered, failed }
-    private let start: Double
+    private var start: Double
     private let grace: Double
     private var replayHits = 0
     private var listHits = 0
     private var retryAt: Double?
+    private var lastObservation: Double?
     public init(at now: Double, grace: Double) { start = now; self.grace = max(12, grace) }
+    public mutating func suspend(for seconds: Double) {
+        guard seconds.isFinite, seconds >= 0 else { return }
+        start += seconds
+        if let retryAt { self.retryAt = retryAt + seconds }
+        if let lastObservation { self.lastObservation = lastObservation + seconds }
+    }
     public mutating func observe(listVisible: Bool, sameRow: Bool, playbackVisible: Bool, at now: Double) -> Action {
-        if now - start >= max(45, grace * 2 + 5) { return .failed }
+        guard now.isFinite, now >= start else { return .failed }
+        if let lastObservation, now <= lastObservation { return .wait }
+        lastObservation = now
         replayHits = !listVisible && playbackVisible ? replayHits + 1 : 0
         if replayHits >= 2 { return .entered }
+        // Exhausting automatic retries is not a terminal observation state:
+        // a delayed load or manual Play can still be confirmed without clicking.
+        if now - start >= max(45, grace * 2 + 5) { return .failed }
         listHits = listVisible && sameRow && !playbackVisible ? listHits + 1 : 0
         if listHits >= 2 && now - (retryAt ?? start) >= grace {
             guard retryAt == nil else { return .failed }
@@ -88,7 +99,7 @@ public enum ReplayControls {
     // Restrict OCR to the replay toolbar; never treat a card's numeric text as speed.
     public static func speed(in lines: [TextLine]) -> ReplaySpeedControl? {
         let matches = lines.compactMap { line -> ReplaySpeedControl? in
-            guard line.x > 0.70, line.y > 0.65, line.width < 0.25, line.height < 0.12 else { return nil }
+            guard line.validUnitRect, line.x > 0.70, line.y > 0.65, line.width < 0.25, line.height < 0.12 else { return nil }
             let text = line.text.lowercased().filter { !$0.isWhitespace }
                 .replacingOccurrences(of: "×", with: "x")
             let one = ["1x", "x1", "1.0x", "x1.0", "1倍", "1倍速", "1.0倍", "1.0倍速"]

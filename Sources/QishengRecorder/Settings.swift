@@ -19,6 +19,7 @@ struct Settings: Codable {
     var captureMode = CaptureMode.region
     var unattended = false
     var showHUD = true
+    var quietNotifications = true
     var cloudKeepAlive = true
     var keepAliveSeconds = 60.0
     var legacyCalibrationBundleID: String?
@@ -30,7 +31,7 @@ struct Settings: Codable {
     init() {}
     enum CodingKeys: String, CodingKey {
         case outputDirectory, targetBundleID, captureDisplayID, systemAudio, speed2x, bothPerspectives, autoStartPerspective
-        case loadingSeconds, maxSeconds, profiles, captureMode, unattended, showHUD, legacyCalibrationBundleID
+        case loadingSeconds, maxSeconds, profiles, captureMode, unattended, showHUD, quietNotifications, legacyCalibrationBundleID
         case cloudKeepAlive, keepAliveSeconds
         case autoReview, autoAssetUpdates
         case cloudAutoLogin, cloudAutoAcceptAgreements
@@ -51,6 +52,7 @@ struct Settings: Codable {
         captureMode = try values.decodeIfPresent(CaptureMode.self, forKey: .captureMode) ?? captureMode
         unattended = try values.decodeIfPresent(Bool.self, forKey: .unattended) ?? unattended
         showHUD = try values.decodeIfPresent(Bool.self, forKey: .showHUD) ?? showHUD
+        quietNotifications = try values.decodeIfPresent(Bool.self, forKey: .quietNotifications) ?? quietNotifications
         cloudKeepAlive = try values.decodeIfPresent(Bool.self, forKey: .cloudKeepAlive) ?? cloudKeepAlive
         let interval = try values.decodeIfPresent(Double.self, forKey: .keepAliveSeconds) ?? keepAliveSeconds
         keepAliveSeconds = KeepAliveSchedule.allowedInterval.contains(interval) ? interval : 60

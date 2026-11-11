@@ -150,11 +150,13 @@ func runViewsUISelfTest() {
     model.screenAllowed = true; model.accessibilityAllowed = true
     model.settings.captureMode = .window
     model.settings.unattended = true
+    model.settings.quietNotifications = true
     model.rows = (1...5).map { index in
         var row = Replay(id: index, date: "2000-02-03_0405", mode: "匹配模式",
                          left: ["诺艾尔", "嘉明", "阿贝多"], right: ["菲林斯", "哥伦比娅", "伊涅芙"],
                          play: UnitPoint(x: 0.94, y: Double(index) * 0.15))
         row.playDetected = true
+        row.recordingChoice = ReplayRecordingChoice.allCases[(index - 1) % 3]
         return row
     }
     model.status = "本地界面检查，不连接账号或操作游戏。"
@@ -165,4 +167,41 @@ func runViewsUISelfTest() {
     window.contentView = NSHostingView(rootView: MainView(model: model, initialTab: "record"))
     model.mainWindow = window
     model.showWindow()
+    if let path = ProcessInfo.processInfo.environment["QISHENG_UI_SNAPSHOT_DIR"] {
+        Task { @MainActor in
+            do {
+                let directory = URL(fileURLWithPath: path, isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                @MainActor func descendants(_ view: NSView) -> [NSView] {
+                    [view] + view.subviews.flatMap(descendants)
+                }
+                for (width, height) in [(1120.0, 850.0), (1000.0, 700.0)] {
+                    window.setContentSize(NSSize(width: width, height: height))
+                    try await Task.sleep(for: .milliseconds(500))
+                    guard let root = window.contentView,
+                          let scroll = descendants(root).compactMap({ $0 as? NSScrollView })
+                            .filter({ $0.frame.width > 500 }).first else {
+                        throw RecorderError.message("Recording scroll view unavailable")
+                    }
+                    for (label, fraction) in [("top", 0.0), ("middle", 0.5), ("rows", 1.0)] {
+                        let travel = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
+                        scroll.contentView.scroll(to: NSPoint(x: 0, y: travel * fraction))
+                        scroll.reflectScrolledClipView(scroll.contentView)
+                        try await Task.sleep(for: .milliseconds(250))
+                        root.layoutSubtreeIfNeeded()
+                        guard let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) else {
+                            throw RecorderError.message("UI bitmap unavailable")
+                        }
+                        root.cacheDisplay(in: root.bounds, to: bitmap)
+                        guard let data = bitmap.representation(using: .png, properties: [:]) else {
+                            throw RecorderError.message("UI PNG unavailable")
+                        }
+                        try data.write(to: directory.appendingPathComponent("\(Int(width))-\(label).png"))
+                    }
+                }
+                print("PASS: six native recording-view snapshots; synthetic rows only")
+                window.close(); NSApp.terminate(nil)
+            } catch { fputs("UI snapshot failed: \(error)\n", stderr); exit(1) }
+        }
+    }
 }

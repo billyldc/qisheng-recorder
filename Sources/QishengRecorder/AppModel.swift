@@ -4,6 +4,15 @@ import AVFoundation
 import ReplayCore
 
 private struct NavigationPageChanged: Error {}
+private struct AutomationAssistanceRequired: Error {
+    let message: String
+    init(_ message: String) { self.message = message }
+}
+private struct PointerInputDeferred: Error {
+    let point: UnitPoint
+    let region: CaptureRegion
+    let detail: String
+}
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -13,6 +22,7 @@ final class AppModel: ObservableObject {
     @Published var region: CaptureRegion?
     @Published var preview: NSImage?
     @Published var rows: [Replay] = []
+    @Published var pendingScanRows: [Replay]?
     @Published var status = "先完成权限设置，再选取游戏区域。" {
         didSet { if status != oldValue { addLog(status) } }
     }
@@ -26,6 +36,11 @@ final class AppModel: ObservableObject {
     @Published var activeRow: Int?
     @Published var activePerspective: ReplayPerspective?
     @Published var perspectiveVerified = false
+    @Published private(set) var replayConfirmed = false
+    @Published private(set) var quietRecoveryAvailable = false
+    @Published private(set) var notificationQuietStatus = ""
+    @Published var assistanceMessage: String?
+    private var assistanceContinued = false
     @Published private(set) var keepAliveCount = 0
     @Published private(set) var keepAliveOnly = false
     @Published private(set) var keepAliveTarget: KeepAliveTarget?
@@ -53,6 +68,8 @@ final class AppModel: ObservableObject {
     private let selector = RegionSelector()
     private let recorder = ScreenRecorder()
     private let session = RecordingSession()
+    private let quietSession: NotificationQuietSession
+    private var sessionCaptureRegion: CaptureRegion?
     private let hud = RecordingHUD()
     private var operation: Task<Void, Never>?
     private var startedAt: Date?
@@ -61,13 +78,17 @@ final class AppModel: ObservableObject {
     private var sessionRunning = false
     private var interruption: Error?
     private var focusLostAt: Date?
+    private var activeTakeDeadline: Double?
     private var startAfterKeepAliveSelection = false
     private var lastSessionDiagnostic = ""
     private let persistent: Bool
 
     init(persistent: Bool = true) {
         self.persistent = persistent
-        if !persistent { settings = Settings() }
+        quietSession = NotificationQuietSession(journal: persistent
+            ? Settings.directory.appendingPathComponent("recovery/notification-focus.json") : nil)
+        quietRecoveryAvailable = quietSession.canRecover
+        if !persistent { settings = Settings(); settings.quietNotifications = false }
         else if let saved = try? String(contentsOf: Settings.directory.appendingPathComponent("session.log"), encoding: .utf8) {
             log = Array(saved.split(separator: "\n").suffix(200).map(String.init))
         }
@@ -234,7 +255,7 @@ final class AppModel: ObservableObject {
 
     func resetSelection(clearKeepAlive: Bool = false) {
         guard !busy && !selectionActive else { return }
-        region = nil; preview = nil; rows = []; windowChoices = []
+        region = nil; preview = nil; rows = []; pendingScanRows = nil; windowChoices = []
         if clearKeepAlive { keepAliveTarget = nil }
         status = settings.captureMode == .window ? "请选择收藏对局所在的完整窗口。" : "请选择完整游戏区域。"
     }
@@ -361,7 +382,12 @@ final class AppModel: ObservableObject {
                 let resources = Bundle.main.resourceURL!
                 let rows = try await Task.detached(priority: .userInitiated) { try Metadata.scan(image: image, resources: resources) }.value
                 try Task.checkCancellation()
-                self.rows = CloudLaunchPolicy.restoringChoices(self.rows, in: rows) ?? rows
+                guard let restored = CloudLaunchPolicy.restoringChoices(self.rows, in: rows) else {
+                    self.pendingScanRows = rows
+                    self.status = "识别结果与原来的列表不一致，已保留勾选、逐局视角和人工角色修正。请核对后选择是否使用本次结果。"
+                    return
+                }
+                self.rows = restored; self.pendingScanRows = nil
                 self.status = rows.isEmpty ? "没有读到收藏对局。请确认游戏停在收藏列表，或手动添加。" : "已读取 \(rows.count) 局。请核对角色、日期和模式，再试录检查边框与声音。"
                 self.addLog("识别收藏列表：\(rows.count) 局")
             } catch {
@@ -375,6 +401,11 @@ final class AppModel: ObservableObject {
         let id = (rows.map(\.id).max() ?? 0) + 1
         rows.append(Replay(id: id, date: "未知日期", mode: "未知模式", left: Array(repeating: "未识别", count: 3),
                            right: Array(repeating: "未识别", count: 3), play: UnitPoint(x: 0.94, y: 0.2)))
+    }
+    func useNewScanResults() {
+        guard !busy, let replacement = pendingScanRows else { return }
+        rows = replacement; pendingScanRows = nil
+        status = "已使用新的识别列表，请重新核对勾选和逐局录制视角。"
     }
 
     func calibrate(_ key: String, rowID: Int? = nil) {
@@ -428,7 +459,11 @@ final class AppModel: ObservableObject {
             throw RecorderError.message("鼠标输入位置超出录制区域。")
         }
         defer { if sessionRunning { hud.restore() } }
-        try await hud.hideForClick()
+        do { try await hud.hideForClick() }
+        catch {
+            if kind == .keepAlive { addLog("保活暂缓：悬浮窗尚未隐藏"); return false }
+            throw PointerInputDeferred(point: point, region: region, detail: "等待悬浮窗完全隐藏")
+        }
         var check = window.checkClick(events[0].location)
         if !target.isActive || !check.allowed {
             guard settings.unattended || keepAliveOnly || !recording else {
@@ -437,10 +472,14 @@ final class AppModel: ObservableObject {
                     addLog("云原神保活暂缓：目标失焦或位置被遮挡")
                     return false
                 }
-                throw RecorderError.message(target.isActive ? "点击位置被其他窗口遮挡，已停止自动点击。" : "目标应用已离开前台，已停止自动点击。")
+                throw PointerInputDeferred(point: point, region: region, detail: "目标暂时失焦或点击位置被弹窗遮挡")
             }
             addLog(kind == .keepAlive ? "保活前恢复已选游戏窗口" : "点击前恢复已选游戏窗口")
-            try window.raise()
+            do { try window.raise() }
+            catch {
+                if kind == .keepAlive { addLog("保活暂缓：窗口未能置前"); return false }
+                throw PointerInputDeferred(point: point, region: region, detail: "窗口暂时无法置前，等待恢复")
+            }
             try await Task.sleep(for: .milliseconds(500))
             check = window.checkClick(events[0].location)
         }
@@ -452,7 +491,7 @@ final class AppModel: ObservableObject {
         guard target.isActive, check.allowed else {
             addLog(check.detail)
             if kind == .keepAlive { addLog("云原神保活暂缓：目标窗口未就绪"); return false }
-            throw RecorderError.message("目标窗口未就绪或点击位置被遮挡，已停止自动点击。")
+            throw PointerInputDeferred(point: point, region: region, detail: "等待目标窗口和点击位置恢复")
         }
         if kind == .keepAlive && NSEvent.pressedMouseButtons != 0 { return false }
         if keepAliveOnly { try keepAliveTarget?.validateSelectedTab() }
@@ -467,7 +506,7 @@ final class AppModel: ObservableObject {
         guard target.isActive, check.allowed else {
             addLog(check.detail)
             if kind == .keepAlive { addLog("云原神保活暂缓：鼠标移动期间目标状态改变"); return false }
-            throw RecorderError.message("点击前目标状态改变，已停止。")
+            throw PointerInputDeferred(point: point, region: region, detail: "点击前出现遮挡，将重新识别后再试")
         }
         if kind == .keepAlive {
             guard NSEvent.pressedMouseButtons == 0 else { return false }
@@ -494,16 +533,164 @@ final class AppModel: ObservableObject {
         do { try JSONEncoder().encode(replay).write(to: video.deletingPathExtension().appendingPathExtension("json"), options: .atomic) }
         catch { addLog("视角与角色信息保存失败，视频仍保留：\(error.localizedDescription)") }
     }
+    private func reportPlaybackAttention(_ reason: String, replay: inout Replay, video: URL) {
+        var warnings = replay.recordingWarnings ?? []
+        if !warnings.contains(reason) {
+            warnings.append(reason)
+            replay.recordingWarnings = warnings
+            saveReplayMetadata(replay, at: video)
+            addLog("回放需核对：画面仍在保存；" + reason)
+        }
+        assistanceMessage = "回放检查：" + reason + "画面仍在保存，请确认是否需要继续播放。"
+        status = assistanceMessage!
+    }
 
     func markRecordingStarted() {
         elapsed = 0
         startedAt = Date()
         recording = true
+        activeTakeDeadline = ProcessInfo.processInfo.systemUptime + settings.maxSeconds
+    }
+
+    func continueAutomation() {
+        guard busy, !stopping, session.unlocked else { return }
+        assistanceContinued = true
+        if let selected = sessionCaptureRegion ?? region,
+           let window = CaptureWindow.list(pid: selected.anchorOwnerPID).first(where: { $0.id == selected.anchorWindowID }) {
+            do { try window.raise() }
+            catch { addLog("窗口尚未恢复，将继续等待；没有发送游戏点击。") }
+        }
+    }
+
+    private func awaitAssistance(_ message: String) async throws {
+        assistanceContinued = false
+        assistanceMessage = message
+        status = message
+        defer { assistanceMessage = nil; assistanceContinued = false }
+        while !assistanceContinued {
+            try Task.checkCancellation()
+            guard session.unlocked else { throw RecorderError.message("桌面已锁定，已停止自动操作。") }
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        try Task.checkCancellation()
+    }
+
+    private func recoverInput(_ deferred: PointerInputDeferred) async throws {
+        var readiness = AutomationReadiness()
+        status = deferred.detail + (recording
+            ? "；录像继续保存，恢复后重新识别，不补发旧点击。"
+            : "；自动输入等待恢复，未发送这次点击，尚未开始新的片段。")
+        defer { assistanceMessage = nil; assistanceContinued = false; hud.restore() }
+        while true {
+            try Task.checkCancellation()
+            guard session.unlocked, AXIsProcessTrusted() else {
+                throw RecorderError.message("桌面锁定或辅助功能权限失效，已停止自动操作。")
+            }
+            let current = try deferred.region.resolved()
+            guard let target = targetApplication(),
+                  let window = CaptureWindow.list(pid: target.processIdentifier).first(where: { $0.id == current.anchorWindowID }) else {
+                throw RecorderError.message("目标窗口已关闭，已保留录像。")
+            }
+            if recording { try recorder.checkFailure() }
+            try? await hud.hideForClick()
+            let position = RegionGeometry.screenPoint(deferred.point, source: current.sourceRect,
+                                                       displayOrigin: CGDisplayBounds(current.displayID).origin)
+            let available = target.isActive && NSEvent.pressedMouseButtons == 0 && window.checkClick(position).allowed
+            hud.restore()
+            switch readiness.observe(available: available, at: ProcessInfo.processInfo.systemUptime) {
+            case .readyForFreshEvidence:
+                status = "窗口已恢复，正在重新识别当前页面…"
+                return
+            case .needsAssistance:
+                assistanceMessage = "请关闭遮挡或切回原神；也可点击「恢复窗口并继续」。不会点击弹窗。"
+            case .waiting: break
+            }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+    }
+
+    private func openReplayFromFavorites(_ replay: Replay, region: CaptureRegion) async throws -> ReplayPlayerHeaders? {
+        var readiness = AutomationReadiness(maximumGap: 15)
+        defer { assistanceMessage = nil; assistanceContinued = false }
+        while true {
+            try Task.checkCancellation()
+            let image = try await recorder.screenshot(region: region.resolved())
+            let lines = try await Task.detached { try Metadata.text(in: image) }.value
+            let matches = lines.filter { ReplayText.date($0.text) == replay.date && abs($0.y - replay.play.y) < 0.15 }
+            let manualList = replay.date == "未知日期" && CloudLaunchPolicy.state(lines) == .favorites
+            switch readiness.observe(available: matches.count == 1 || manualList, at: ProcessInfo.processInfo.systemUptime) {
+            case .needsAssistance:
+                assistanceMessage = "请切回第 \(replay.id) 局所在的收藏列表；确认到对应日期后自动继续，不会点其他对局。"
+                status = assistanceMessage!
+            case .waiting: break
+            case .readyForFreshEvidence:
+                var reference: ReplayPlayerHeaders?
+                if replay.preferredPerspective.requiresSwitch {
+                    let first = ReplayPlayerHeaders.fromFavorites(lines, date: replay.date, play: replay.play)
+                    try await Task.sleep(for: .milliseconds(350))
+                    let secondImage = try await recorder.screenshot(region: region.resolved())
+                    let second = try await Task.detached { try Metadata.text(in: secondImage) }.value
+                    let secondManualList = replay.date == "未知日期" && CloudLaunchPolicy.state(second) == .favorites
+                    guard second.filter({ ReplayText.date($0.text) == replay.date && abs($0.y - replay.play.y) < 0.15 }).count == 1 || secondManualList else {
+                        readiness = AutomationReadiness(maximumGap: 15)
+                        continue
+                    }
+                    reference = ReplayPlayerHeaders.stable(first,
+                        ReplayPlayerHeaders.fromFavorites(second, date: replay.date, play: replay.play))
+                }
+                do {
+                    try await sendPointerInput(replay.play, in: region)
+                    if replay.preferredPerspective.requiresSwitch {
+                        addLog(reference == nil ? "列表方向参照不足，将用回放画面复核；不会盲切" : "已用两次列表画面建立方向参照")
+                    }
+                    return reference
+                } catch let deferred as PointerInputDeferred {
+                    try await recoverInput(deferred)
+                    readiness = AutomationReadiness(maximumGap: 15)
+                }
+            }
+            try await Task.sleep(for: .milliseconds(700))
+        }
+    }
+
+    private func returnToFavorites(region: CaptureRegion) async throws {
+        var readiness = AutomationReadiness(maximumGap: 15)
+        var sentExit = false
+        defer { assistanceMessage = nil; assistanceContinued = false }
+        while true {
+            try Task.checkCancellation()
+            let image = try await recorder.screenshot(region: region.resolved())
+            let lines = try await Task.detached { try Metadata.text(in: image) }.value
+            let favorites = CloudLaunchPolicy.state(lines) == .favorites
+            let ending = lines.contains { $0.text.contains("对局胜利") || $0.text.contains("对局失败") }
+            let exit = lines.filter { $0.text.contains("退出观看") }
+            let point = exit.count == 1 ? UnitPoint(x: exit[0].x + exit[0].width / 2, y: exit[0].y + exit[0].height / 2) : calibration.exit
+            let state = readiness.observe(available: favorites || (!sentExit && ending && point != nil),
+                                          at: ProcessInfo.processInfo.systemUptime)
+            if state == .readyForFreshEvidence {
+                if favorites { return }
+                if let point {
+                    do {
+                        try await sendPointerInput(point, in: region)
+                        sentExit = true
+                        readiness = AutomationReadiness(maximumGap: 15)
+                    } catch let deferred as PointerInputDeferred {
+                        try await recoverInput(deferred)
+                        readiness = AutomationReadiness(maximumGap: 15)
+                    }
+                }
+            } else if state == .needsAssistance {
+                assistanceMessage = "本局已保存。请手动返回收藏列表，识别后会继续剩余对局，不会重录已完成片段。"
+                status = assistanceMessage!
+            }
+            try await Task.sleep(for: .milliseconds(700))
+        }
     }
 
     private func confirmReplayEntry(_ replay: Replay, region: CaptureRegion, keepAlive: inout KeepAliveSchedule) async throws {
         let start = ProcessInfo.processInfo.systemUptime
         var gate = ReplayEntryGate(at: start, grace: settings.loadingSeconds)
+        defer { assistanceMessage = nil }
         while true {
             try Task.checkCancellation()
             try recorder.checkFailure()
@@ -515,13 +702,25 @@ final class AppModel: ObservableObject {
             let now = ProcessInfo.processInfo.systemUptime
             let list = lines.contains { ReplayText.date($0.text) != nil }
             let sameRow = lines.filter { ReplayText.date($0.text) == replay.date && abs($0.y - replay.play.y) < 0.15 }.count == 1
+            let previousGate = gate
             switch gate.observe(listVisible: list, sameRow: sameRow, playbackVisible: controls.playback != nil, at: now) {
-            case .entered: addLog("第 \(replay.id) 局：已连续确认回放控件，视频写入正常"); return
+            case .entered:
+                replayConfirmed = true
+                addLog("第 \(replay.id) 局：已连续确认回放控件，视频写入正常")
+                return
             case .failed:
-                throw RecorderError.message("第 \(replay.id) 局未确认进入回放；短片已保留并标为未完成。请核对播放位置。")
+                replayConfirmed = false
+                assistanceMessage = "画面仍在保存，但尚未确认回放。请检查第 \(replay.id) 局是否已播放；确认到回放控件后自动继续。"
+                status = assistanceMessage!
             case .retry:
                 status = "第 \(replay.id) 局尚未进入回放，复核同一收藏行后重试一次…"
-                try await sendPointerInput(replay.play, in: region, clickHoldMilliseconds: 250)
+                do { try await sendPointerInput(replay.play, in: region, clickHoldMilliseconds: 250) }
+                catch let deferred as PointerInputDeferred {
+                    gate = previousGate
+                    let pausedAt = ProcessInfo.processInfo.systemUptime
+                    try await recoverInput(deferred)
+                    gate.suspend(for: ProcessInfo.processInfo.systemUptime - pausedAt)
+                }
             case .wait: break
             }
             if keepAlive.takeDue(at: now), try await sendPointerInput(UnitPoint(x: 0.78, y: 0.27), in: region, kind: .keepAlive) {
@@ -533,6 +732,7 @@ final class AppModel: ObservableObject {
 
     private func maintainDoubleSpeed(_ monitor: inout ReplaySpeedMonitor, lines: [TextLine],
                                      controls: ReplayPlaybackControls, region: CaptureRegion, at now: Double) async throws -> Bool {
+        let previous = monitor
         switch monitor.observe(controls, menuOpen: ReplayPerspectiveMenu.isOpen(lines), at: now) {
         case .wait: return false
         case .confirmed:
@@ -543,7 +743,12 @@ final class AppModel: ObservableObject {
             return false
         case .click(let point, let attempt):
             addLog(attempt == 1 ? "检测到回放控件，正在开启二倍速…" : "仍检测到正常速度，正在再次尝试二倍速…")
-            try await sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
+            do { try await sendPointerInput(point, in: region, clickHoldMilliseconds: 250) }
+            catch let deferred as PointerInputDeferred {
+                monitor = previous
+                try await recoverInput(deferred)
+                return true // The caller must discard the pre-interruption image.
+            }
             return true
         }
     }
@@ -583,9 +788,13 @@ final class AppModel: ObservableObject {
             }.value
             try Task.checkCancellation()
             if entryCheck.failed(listVisible: lines.contains(where: { ReplayText.date($0.text) != nil }), at: now) {
-                throw RecorderError.message("播放点击未进入回放。短片已保留，请校准这一局的播放位置后重试。")
+                replayConfirmed = false
+                try await confirmReplayEntry(replay, region: region, keepAlive: &keepAlive)
+                progress = ReplayProgressHealth()
+                continue
             }
             if try await maintainDoubleSpeed(&speed, lines: lines, controls: controls, region: region, at: now) {
+                progress = ReplayProgressHealth()
                 try await Task.sleep(for: .milliseconds(250))
                 continue
             }
@@ -593,7 +802,10 @@ final class AppModel: ObservableObject {
                 lines.contains { $0.text.contains("退出观看") }
             if let reason = progress.observe(pixels: ScreenRecorder.boardPixels(image),
                                              playback: flow.waitingForPlayback ? controls.playback?.state : nil,
-                                             ending: ending, at: now) { throw RecorderError.message(reason) }
+                                             ending: ending, at: now) {
+                reportPlaybackAttention(reason, replay: &replay, video: video)
+                progress = ReplayProgressHealth()
+            }
             endingHits = ending ? endingHits + 1 : 0
             if endingHits >= 2 {
                 originalHeaders = flow.orientationReference
@@ -604,6 +816,7 @@ final class AppModel: ObservableObject {
                 return
             }
             if ending { try await Task.sleep(for: .seconds(1)); continue }
+            let previousFlow = flow
             let action = flow.observe(lines: lines, controls: controls, at: now)
             if now >= nextDiagnostic {
                 let menuState = ReplayPerspectiveMenu.detect(lines) != nil ? "switchAvailable" :
@@ -611,7 +824,7 @@ final class AppModel: ObservableObject {
                 addLog("视角检查：菜单=\(menuState)，视角=\(flow.confirmedPerspective?.rawValue ?? "unknown")，播放=\(controls.playback?.state.rawValue ?? "unknown")，等待恢复=\(flow.waitingForPlayback)，方向参照=\(flow.hasOrientationReference)")
                 nextDiagnostic = now + 15
             }
-            switch action {
+            do { switch action {
             case .pause(let point):
                 replay.perspectiveStatus = "pausingBeforeSwitch"
                 saveReplayMetadata(replay, at: video)
@@ -656,6 +869,14 @@ final class AppModel: ObservableObject {
                     status = "正在等待可辨认的双方牌手信息；确认切换方向后再点击，录制与保活继续…"
                 }
             }
+            } catch let deferred as PointerInputDeferred {
+                flow = previousFlow
+                replay.perspectiveStatus = "waitingForSafeInput"
+                saveReplayMetadata(replay, at: video)
+                try await recoverInput(deferred)
+                progress = ReplayProgressHealth()
+                continue
+            }
             try await Task.sleep(for: .seconds(1))
         }
     }
@@ -669,6 +890,8 @@ final class AppModel: ObservableObject {
             defer { self.finishOperation() }
             var url: URL?
             do {
+                await self.prepareRecordingQuiet()
+                try Task.checkCancellation()
                 try self.focusTarget()
                 self.mainWindow?.orderOut(nil)
                 try await Task.sleep(for: .seconds(1))
@@ -711,6 +934,8 @@ final class AppModel: ObservableObject {
             defer { self.finishOperation() }
             var currentURL: URL?
             do {
+                await self.prepareRecordingQuiet()
+                try Task.checkCancellation()
                 try self.focusTarget()
                 self.mainWindow?.orderOut(nil)
                 try await Task.sleep(for: .seconds(1))
@@ -724,29 +949,9 @@ final class AppModel: ObservableObject {
                 for (offset, planned) in batch.enumerated() {
                     var replay = planned
                     try Task.checkCancellation()
-                    let shot = try await self.recorder.screenshot(region: region.resolved())
-                    let lines = try await Task.detached { try Metadata.text(in: shot) }.value
-                    guard lines.contains(where: { ReplayText.date($0.text) == replay.date && abs($0.y - replay.play.y) < 0.15 }) || replay.date == "未知日期" else {
-                        throw RecorderError.message("当前收藏列表与第 \(replay.id) 局的日期不一致，已停止自动点击。请重新扫描。")
-                    }
                     var originalHeaders: ReplayPlayerHeaders?
-                    if replay.preferredPerspective.requiresSwitch {
-                        let first = ReplayPlayerHeaders.fromFavorites(lines, date: replay.date, play: replay.play)
-                        if first != nil {
-                            try await Task.sleep(for: .milliseconds(350))
-                            let confirmation = try await self.recorder.screenshot(region: region.resolved())
-                            let confirmedLines = try await Task.detached { try Metadata.text(in: confirmation) }.value
-                            guard confirmedLines.contains(where: { ReplayText.date($0.text) == replay.date && abs($0.y - replay.play.y) < 0.15 }) else {
-                                throw RecorderError.message("收藏列表在复核期间已改变，请重新扫描后录制。")
-                            }
-                            originalHeaders = ReplayPlayerHeaders.stable(first,
-                                ReplayPlayerHeaders.fromFavorites(confirmedLines, date: replay.date, play: replay.play))
-                        }
-                        self.addLog(originalHeaders == nil
-                            ? "列表方向参照不明确，将在回放中确认后切换；牌手名字不写入录像信息"
-                            : "已用两次列表画面建立方向参照；牌手名字仅在本局内存中使用")
-                    }
                     self.activeRow = replay.id; self.activePerspective = replay.preferredPerspective
+                    self.replayConfirmed = false
                     self.perspectiveVerified = !replay.preferredPerspective.requiresSwitch
                     var speed = ReplaySpeedMonitor(enabled: self.settings.speed2x,
                                                    calibrated: self.calibration.speed)
@@ -755,7 +960,7 @@ final class AppModel: ObservableObject {
                     currentURL = path
                     replay.recordingOutcome = "incomplete"
                     self.saveReplayMetadata(replay, at: path)
-                    try await self.sendPointerInput(replay.play, in: region)
+                    originalHeaders = try await self.openReplayFromFavorites(replay, region: region)
                     try await self.recorder.start(region: region.resolved(), url: path, audio: self.settings.systemAudio)
                     self.markRecordingStarted()
                     self.status = "第 \(replay.id) 局：正在保存画面，等待确认进入回放…"
@@ -768,8 +973,9 @@ final class AppModel: ObservableObject {
                     else {
                         let afterClick = try await self.recorder.screenshot(region: region.resolved())
                         let afterLines = try await Task.detached { try Metadata.text(in: afterClick) }.value
-                        guard !afterLines.contains(where: { ReplayText.date($0.text) != nil }) else {
-                            throw RecorderError.message("播放点击未进入回放。短片已保留，请校准这一局的播放位置后重试。")
+                        if afterLines.contains(where: { ReplayText.date($0.text) != nil }) {
+                            self.replayConfirmed = false
+                            try await self.confirmReplayEntry(replay, region: region, keepAlive: &keepAlive)
                         }
                         if self.settings.speed2x {
                             for _ in 0..<3 {
@@ -789,7 +995,6 @@ final class AppModel: ObservableObject {
                     self.perspectiveVerified = !replay.preferredPerspective.requiresSwitch || replay.confirmedPerspective == .opponent
                     self.status = "正在保存第 \(replay.id) 局画面 · \(self.perspectiveVerified ? replay.preferredPerspective.label : "对方视角未确认")（\(offset + 1)/\(batch.count) 段）"
                     var endHits = 0
-                    var detectedExit: UnitPoint?
                     var recovery = ReplayPlaybackRecovery()
                     var progress = ReplayProgressHealth()
                     var previousHeaders: ReplayPlayerHeaders?
@@ -812,6 +1017,12 @@ final class AppModel: ObservableObject {
                         }.value
                         let exit = text.first { $0.text.contains("退出观看") }
                         let ending = text.contains { $0.text.contains("对局胜利") || $0.text.contains("对局失败") }
+                        if text.contains(where: { ReplayText.date($0.text) != nil }) {
+                            self.replayConfirmed = false
+                            try await self.confirmReplayEntry(replay, region: region, keepAlive: &keepAlive)
+                            progress = ReplayProgressHealth(); recovery = ReplayPlaybackRecovery()
+                            continue
+                        }
                         if replay.preferredPerspective.requiresSwitch, let reference = originalHeaders {
                             let current = ReplayPlayerHeaders.detect(text, matching: reference) ?? ReplayPlayerHeaders.detect(text)
                             if let current, current == previousHeaders, let perspective = current.perspective(relativeTo: reference) {
@@ -829,45 +1040,59 @@ final class AppModel: ObservableObject {
                         let now = ProcessInfo.processInfo.systemUptime
                         if let reason = progress.observe(pixels: ScreenRecorder.boardPixels(screenshot),
                                                          playback: controls.playback?.state, ending: ending, at: now) {
-                            throw RecorderError.message(reason)
+                            self.reportPlaybackAttention(reason, replay: &replay, video: path)
+                            progress = ReplayProgressHealth()
                         }
                         if !ending && self.settings.speed2x {
-                            _ = try await self.maintainDoubleSpeed(&speed, lines: text, controls: controls, region: region, at: now)
+                            if try await self.maintainDoubleSpeed(&speed, lines: text, controls: controls, region: region, at: now) {
+                                progress = ReplayProgressHealth(); recovery = ReplayPlaybackRecovery()
+                                continue
+                            }
                         }
                         if !ending && !ReplayPerspectiveMenu.isOpen(text) {
                             switch recovery.observe(controls.playback, at: now) {
                             case .resume(let point):
                                 self.status = "第 \(replay.id) 局回放暂停，正在尝试继续；视频仍在保存…"
-                                try await self.sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
-                            case .finished: recovery = ReplayPlaybackRecovery()
+                                do { try await self.sendPointerInput(point, in: region, clickHoldMilliseconds: 250) }
+                                catch let deferred as PointerInputDeferred {
+                                    recovery = ReplayPlaybackRecovery()
+                                    try await self.recoverInput(deferred)
+                                    progress = ReplayProgressHealth()
+                                    continue
+                                }
+                            case .finished:
+                                recovery = ReplayPlaybackRecovery()
+                                if self.assistanceMessage?.hasPrefix("回放检查：") == true {
+                                    self.assistanceMessage = nil
+                                    self.status = "回放已恢复，继续保存当前对局…"
+                                }
                             case .wait: break
                             }
                         }
                         if now - replayStart < 5 { continue }
                         endHits = (exit != nil || self.calibration.exit != nil) && ending ? endHits + 1 : 0
-                        if let exit { detectedExit = UnitPoint(x: exit.x + exit.width / 2, y: exit.y + exit.height / 2) }
                         if endHits == 1 { self.status = "第 \(replay.id) 局：检测到结束画面，正在复核…" }
                         if endHits >= 3 { break }
                     }
                     try await Task.sleep(for: .seconds(1.5))
                     self.status = "第 \(replay.id) 局：正在保存游戏画面，完整窗口原片另行保留…"
+                    self.activeTakeDeadline = nil
                     try await self.saveRecording(region: region, keepAlive: &keepAlive)
                     self.recording = false; self.startedAt = nil
-                    try await self.verifyRecording(path, detail: "第 \(replay.id) 局 · \(self.perspectiveVerified ? replay.preferredPerspective.label : "视角待核对")")
-                    replay.recordingOutcome = self.perspectiveVerified ? "complete" : "perspectiveUnconfirmed"
+                    let needsReview = !(replay.recordingWarnings ?? []).isEmpty
+                    try await self.verifyRecording(path, detail: "第 \(replay.id) 局 · \(self.perspectiveVerified ? replay.preferredPerspective.label : "视角待核对")\(needsReview ? " · 播放过程需核对" : "")")
+                    replay.recordingOutcome = !self.perspectiveVerified ? "perspectiveUnconfirmed" : needsReview ? "needsReview" : "complete"
                     do {
                         try JSONEncoder().encode(replay).write(to: path.deletingPathExtension().appendingPathExtension("json"), options: .atomic)
                     } catch { self.addLog("初始角色信息保存失败，视频仍保留：\(error.localizedDescription)") }
                     if self.settings.autoReview { self.queueReview(path) }
                     currentURL = nil
                     if offset < batch.count - 1 {
-                        guard let exit = detectedExit ?? self.calibration.exit else { throw RecorderError.message("没有识别到退出观看按钮，已保存录像，请手动返回收藏列表。") }
                         self.status = "第 \(replay.id) 局已保存，正在返回收藏列表…"
-                        try await self.sendPointerInput(exit, in: region)
-                        try await Task.sleep(for: .seconds(8))
+                        try await self.returnToFavorites(region: region)
                     }
                 }
-                self.status = "本批 \(batch.count) 段已保存，保活已停止；未确认视角的片段仍需核对。"
+                self.status = "本批 \(batch.count) 段已保存，保活已停止；带警告或未确认视角的片段仍需核对。"
             } catch { await self.stopAfterError(error, url: currentURL) }
         }
     }
@@ -905,116 +1130,109 @@ final class AppModel: ObservableObject {
         else { startBatch() }
     }
 
-    private func navigateToTavern(window: CaptureWindow, region: CaptureRegion, page: CGRect,
-                                  keepAlive: inout KeepAliveSchedule) async throws {
+    private func navigateToTavern(window initialWindow: CaptureWindow, region: CaptureRegion, page: CGRect,
+                                  keepAlive: inout KeepAliveSchedule) async throws -> Double {
         var flow = TavernNavigationFlow(at: ProcessInfo.processInfo.systemUptime)
-        var currentRegion = region
-        var pageBounds = page
-        var pageChanges = 0
-        let deadline = ProcessInfo.processInfo.systemUptime + 240
+        var currentRegion = region, pageBounds = page
+        var deadline = ProcessInfo.processInfo.systemUptime + 240
+        var lastPoll = ProcessInfo.processInfo.systemUptime
+        var suspendedSeconds = 0.0
+        defer {
+            assistanceMessage = nil; assistanceContinued = false
+            if cloudLaunchPhase == .navigationHelp { cloudLaunchPhase = .checking }
+        }
         while ProcessInfo.processInfo.systemUptime < deadline {
             try Task.checkCancellation()
-            guard session.unlocked, SafariLauncher.pageURL(window).map(CloudLaunchPolicy.allowed) == true else {
-                throw RecorderError.message("桌面锁定或已离开云原神，地图导航已停止。")
+            let now = ProcessInfo.processInfo.systemUptime
+            if flow.waitingForUser {
+                suspendedSeconds += now - lastPoll
+                deadline += now - lastPoll
+            }
+            lastPoll = now
+            guard session.unlocked,
+                  let window = CaptureWindow.list(pid: initialWindow.ownerPID).first(where: { $0.id == initialWindow.id }),
+                  SafariLauncher.pageURL(window).map(CloudLaunchPolicy.allowed) == true else {
+                throw RecorderError.message("桌面锁定、窗口关闭或已离开官方云原神，已停止自动输入。")
             }
             guard let livePage = SafariLauncher.cloudContentRect(window) else {
-                throw RecorderError.message("浏览器游戏区域不可用，已停止地图导航。")
+                let paused = ProcessInfo.processInfo.systemUptime
+                try await awaitAssistance("浏览器游戏区域暂不可用；请恢复原神画面后点击继续，任务未退出。")
+                let duration = ProcessInfo.processInfo.systemUptime - paused
+                suspendedSeconds += duration; deadline += duration
+                lastPoll = ProcessInfo.processInfo.systemUptime
+                continue
             }
-            if !GameViewport.samePageBounds(pageBounds, livePage) {
-                status = "浏览器游戏区域发生变化，正在重新确认画面边界…"
-                let refreshed = try await GameCaptureRegion.prepare(try window.region(), recorder: recorder)
-                guard let confirmed = SafariLauncher.cloudContentRect(window),
-                      GameViewport.samePageBounds(livePage, confirmed) else { continue }
-                currentRegion = refreshed; pageBounds = confirmed; flow.resetEvidence()
+            if !GameViewport.samePageBounds(pageBounds, livePage) || window.frame != currentRegion.anchorFrame {
+                currentRegion = try await GameCaptureRegion.prepare(try window.region(), recorder: recorder)
+                pageBounds = livePage; flow.resetEvidence()
             }
             func validatePage() throws {
                 guard let live = SafariLauncher.cloudContentRect(window), GameViewport.samePageBounds(pageBounds, live) else {
                     throw NavigationPageChanged()
                 }
             }
-            let now = ProcessInfo.processInfo.systemUptime
             do {
-                if keepAlive.takeDue(at: now), try await sendPointerInput(UnitPoint(x: 0.78, y: 0.27), in: currentRegion, kind: .keepAlive, validate: validatePage) {
+                if keepAlive.takeDue(at: now),
+                   try await sendPointerInput(UnitPoint(x: 0.78, y: 0.27), in: currentRegion, kind: .keepAlive, validate: validatePage) {
                     keepAliveCount += 1
                 }
             } catch is NavigationPageChanged {
-                pageChanges += 1
-                guard pageChanges <= 6 else { throw RecorderError.message("浏览器游戏区域反复变化，已停止导航。") }
                 flow.resetEvidence()
                 continue
             }
-            let current = try currentRegion.resolved()
-            let image = try await recorder.screenshot(region: current)
-            let checkingArrival = flow.checkingArrival, needsZoom = flow.needsZoomControl
-            let needsWorldEvidence = flow.needsWorldEvidence
-            let (lines, zoom) = try await Task.detached {
-                let lines = try needsWorldEvidence
-                    ? Metadata.worldNavigationText(in: image, arrival: checkingArrival)
-                    : Metadata.text(in: image)
-                let zoom = needsZoom ? GameViewport.rgba(image).flatMap {
-                    TavernMapZoom.point(rgba: $0, width: image.width, height: image.height)
-                } : nil
-                return (lines, zoom)
-            }.value
-            try Task.checkCancellation()
+            let image = try await recorder.screenshot(region: currentRegion.resolved())
+            let arrival = flow.checkingArrival
+            let lines = try await Task.detached { try Metadata.worldNavigationText(in: image, arrival: arrival) }.value
             let previousFlow = flow
-            let action = flow.observe(lines, width: image.width, height: image.height, zoom: zoom,
+            let action = flow.observe(lines, width: image.width, height: image.height, zoom: nil,
                                       at: ProcessInfo.processInfo.systemUptime)
             var inputSent = false
             do {
-            switch action {
-            case .wait:
-                break
-            case .openMap, .retryMap, .forward:
-                let key: SafariLauncher.GameKey = action == .forward ? .forward : .map
-                let targeted = action == .retryMap
-                status = action == .retryMap ? "地图尚未打开，已确认仍在游戏画面，正在重试一次…"
-                    : (action == .openMap ? "已确认游戏画面，正在打开地图…" : "已确认小王子在附近，正在靠近…")
-                try await hud.hideForClick()
-                do {
+                switch action {
+                case .wait: break
+                case .needsAssistance(let message):
+                    assistanceMessage = message; status = message
+                    cloudLaunchPhase = .navigationHelp
+                case .forward:
+                    status = "已连续确认小王子和称号，正在小步靠近；不会盲走室外路线…"
+                    try await hud.hideForClick()
+                    defer { hud.restore() }
                     try window.raise()
                     try await Task.sleep(for: .milliseconds(300))
                     try validatePage()
-                    let position = RegionGeometry.screenPoint(UnitPoint(x: 0.5, y: 0.5), source: current.sourceRect,
-                                                              displayOrigin: CGDisplayBounds(current.displayID).origin)
-                    guard window.checkClick(position).allowed else { throw RecorderError.message("游戏窗口被遮挡，已停止地图导航。") }
-                    try await SafariLauncher.pressGameKey(key, in: window, delivery: targeted ? .process : .system, didSendKeyDown: {
-                        inputSent = true
-                    }) {
-                        try validatePage()
-                        guard self.session.unlocked, try currentRegion.resolved().globalRect == current.globalRect else {
-                            throw RecorderError.message("桌面或游戏窗口已改变，已停止地图导航。")
-                        }
+                    let current = try currentRegion.resolved()
+                    let point = UnitPoint(x: 0.5, y: 0.5)
+                    let position = RegionGeometry.screenPoint(point, source: current.sourceRect,
+                                                               displayOrigin: CGDisplayBounds(current.displayID).origin)
+                    guard window.checkClick(position).allowed else {
+                        throw PointerInputDeferred(point: point, region: currentRegion, detail: "小王子附近窗口被遮挡，尚未移动")
                     }
-                } catch { hud.restore(); throw error }
-                hud.restore()
-            case .click(let point, let kind):
-                switch kind {
-                case .mapLayers: status = "正在选择地图地区…"
-                case .mondstadt: status = "正在切换到蒙德地图…"
-                case .zoom: status = "正在确认并放大蒙德城地图…"
-                case .iconCluster: status = "正在查找猫尾酒馆地图图标…"
-                case .tavernCandidate: status = "已识别猫尾酒馆，正在打开传送详情…"
-                case .teleport: status = "已确认蒙德猫尾酒馆传送按钮，正在传送…"
+                    try await SafariLauncher.pressGameKey(.forward, in: window, delivery: .system,
+                                                         didSendKeyDown: { inputSent = true }) {
+                        try validatePage()
+                        guard self.session.unlocked else { throw CancellationError() }
+                    }
+                case .arrived:
+                    addLog("已连续确认小王子入口或回放列表，恢复后续页面检查。")
+                    return suspendedSeconds
+                case .stop(let message): throw RecorderError.message(message)
                 }
-                if kind != .zoom { addLog(status) }
-                try await sendPointerInput(point, in: currentRegion, clickHoldMilliseconds: 250, validate: validatePage)
-            case .arrived:
-                addLog("已确认小王子的 F 对话入口，继续启动回放。")
-                return
-            case .stop(let message):
-                throw RecorderError.message(message)
-            }
             } catch is NavigationPageChanged {
-                pageChanges += 1
-                guard pageChanges <= 6 else { throw RecorderError.message("浏览器游戏区域反复变化，已停止导航。") }
                 flow.pageChanged(from: previousFlow, inputSent: inputSent)
-                addLog(inputSent ? "游戏区域在按键后变化，重新取框并观察结果；不会立即重复按键。" : "游戏区域在输入前变化，重新取框并复核。")
+                continue
+            } catch let deferred as PointerInputDeferred {
+                flow.pageChanged(from: previousFlow, inputSent: false)
+                let paused = ProcessInfo.processInfo.systemUptime
+                try await recoverInput(deferred)
+                let duration = ProcessInfo.processInfo.systemUptime - paused
+                deadline += duration; suspendedSeconds += duration
+                lastPoll = ProcessInfo.processInfo.systemUptime
                 continue
             }
             try await Task.sleep(for: .milliseconds(700))
         }
-        throw RecorderError.message("地图导航超时，已停止；请检查地图或手动前往小王子。")
+        try await awaitAssistance("暂未确认小王子，请手动进入收藏对局列表后继续；没有发送室外地图传送点击。")
+        return suspendedSeconds + max(0, ProcessInfo.processInfo.systemUptime - lastPoll)
     }
 
     func launchSafariAndRecord() { launchSafariAndRecord(preservingSelection: false) }
@@ -1054,9 +1272,9 @@ final class AppModel: ObservableObject {
                 self.settings.targetBundleID = SafariLauncher.bundleID
                 self.settings.captureMode = .window
                 self.region = nil; self.rows = []; self.preview = nil; self.keepAliveTarget = nil
-                let window = try await SafariLauncher.openCloudPage()
+                var window = try await SafariLauncher.openCloudPage()
                 try Task.checkCancellation()
-                let region = try window.region()
+                var region = try window.region()
                 self.region = region
                 self.mainWindow?.orderOut(nil)
                 self.hud.show(model: self, displayID: region.displayID)
@@ -1064,7 +1282,7 @@ final class AppModel: ObservableObject {
                 self.status = "正在检查登录状态和收藏对局页面…"
                 try await Task.sleep(for: .seconds(2))
                 var actions: [CloudPageState: Int] = [:]
-                let deadline = Date().addingTimeInterval(360)
+                var deadline = Date().addingTimeInterval(360)
                 var navigationKeepAlive = KeepAliveSchedule(interval: self.settings.keepAliveSeconds)
                 var navigationKeepAliveStarted = false
                 var lastPrinceEvidence = ""
@@ -1077,8 +1295,22 @@ final class AppModel: ObservableObject {
                 var nextWorldProbe = 0.0
                 var princeInteractionSentAt: Double?
                 var unconfirmedPrinceGreetings = 0
-                while Date() < deadline {
+                while true {
+                    if Date() >= deadline {
+                        self.cloudLaunchPhase = .navigationHelp
+                        try await self.awaitAssistance("等待较久仍未确认收藏列表；请检查网络、排队或当前页面后点击继续。任务和选择保留，没有新增盲点。")
+                        deadline = Date().addingTimeInterval(360)
+                        self.cloudLaunchPhase = .checking
+                    }
+                    let previousActions = actions
+                    let previousDialogue = princeDialogueGuard
+                    do {
                     try Task.checkCancellation()
+                    if let current = CaptureWindow.list(pid: window.ownerPID).first(where: { $0.id == window.id }),
+                       current.frame != window.frame {
+                        window = current; region = try current.region(); self.region = region
+                        princeDialogueGuard = PrinceDialogueGuard()
+                    }
                     guard self.session.unlocked else { throw RecorderError.message("桌面已锁定，启动已暂停。") }
                     guard SafariLauncher.pageURL(window).map(CloudLaunchPolicy.allowed) == true else {
                         throw RecorderError.message("Safari 已离开云原神标签页，请切回官方页面后继续检查。")
@@ -1122,11 +1354,11 @@ final class AppModel: ObservableObject {
                         try await Task.sleep(for: .seconds(1))
                         continue
                     case .stop:
-                        throw RecorderError.message("小王子回放选项或后续页面未能稳定确认，已停止；没有再次按 F 或选择其他选项。请检查页面后继续。")
+                        throw AutomationAssistanceRequired("小王子回放选项或后续页面未能稳定确认，等待协助；没有再次按 F 或选择其他选项。请检查页面后继续。")
                     }
                     if state == .prince, let sentAt = princeInteractionSentAt {
                         guard ProcessInfo.processInfo.systemUptime - sentAt < 15 else {
-                            throw RecorderError.message("已发送小王子对话按键，但未能确认后续界面；为避免误选，已停止。")
+                            throw AutomationAssistanceRequired("已发送小王子对话按键，但未能确认后续界面；请检查后继续，不会重复按 F。")
                         }
                         self.status = "已发送小王子对话按键，正在等待对话界面；不会重复按 F…"
                         try await Task.sleep(for: .seconds(1))
@@ -1146,13 +1378,13 @@ final class AppModel: ObservableObject {
                     switch state {
                     case .dailyReward:
                         guard actions[state, default: 0] == 0 else {
-                            throw RecorderError.message("每日奖励提示未能关闭，请检查云原神页面。")
+                            throw AutomationAssistanceRequired("每日奖励提示未能关闭，请检查云原神页面后继续。")
                         }
                         try await Task.sleep(for: .milliseconds(500))
                         let secondImage = try await self.recorder.screenshot(region: region.resolved())
                         let secondLines = try await Task.detached { try Metadata.cloudNavigationText(in: secondImage) }.value
                         guard let point = CloudLaunchPolicy.confirmedDailyReward(lines, secondLines) else {
-                            throw RecorderError.message("每日奖励提示未能稳定确认，尚未点击。")
+                            throw AutomationAssistanceRequired("每日奖励提示未能稳定确认，尚未点击；请检查页面后继续。")
                         }
                         self.status = "已确认每日奖励提示，正在关闭提示并继续…"
                         try await self.sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
@@ -1160,14 +1392,14 @@ final class AppModel: ObservableObject {
                         try await Task.sleep(for: .seconds(3))
                     case .disconnected:
                         guard actions[state, default: 0] == 0 else {
-                            throw RecorderError.message("云原神重连后仍显示连接中断，请检查网络后重试。")
+                            throw AutomationAssistanceRequired("云原神重连后仍显示连接中断，请检查网络后继续。")
                         }
                         self.status = "检测到云原神连接中断，正在复核后重新启动…"
                         try await Task.sleep(for: .milliseconds(500))
                         let secondImage = try await self.recorder.screenshot(region: region.resolved())
                         let secondLines = try await Task.detached { try Metadata.cloudNavigationText(in: secondImage) }.value
                         guard let point = CloudLaunchPolicy.confirmedDisconnectExit(lines, secondLines) else {
-                            throw RecorderError.message("连接中断弹窗未能稳定确认，尚未点击；请检查网络后继续。")
+                            throw AutomationAssistanceRequired("连接中断弹窗未能稳定确认，尚未点击；请检查网络后继续。")
                         }
                         try await self.sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
                         actions[state] = 1
@@ -1179,7 +1411,7 @@ final class AppModel: ObservableObject {
                                 let tabs = lines.filter { ["密码登录", "账号密码登录", "帐号密码登录"].contains($0.text.trimmingCharacters(in: .whitespacesAndNewlines)) }
                                 let ocrPoint = tabs.count == 1 ? tabs.first.map { UnitPoint(x: $0.x + $0.width / 2, y: $0.y + $0.height / 2) } : nil
                                 guard !switchedPasswordTab, let point = SafariLauncher.passwordLoginPoint(window) ?? ocrPoint else {
-                                    throw RecorderError.message("未能确认密码登录入口。请在 Safari 手动切换到密码登录后继续检查。")
+                                    throw AutomationAssistanceRequired("未能确认密码登录入口。请在 Safari 手动切换到密码登录后继续检查。")
                                 }
                                 self.status = "正在从验证码登录切换到密码登录…"
                                 try await self.sendPointerInput(point, in: region)
@@ -1193,6 +1425,7 @@ final class AppModel: ObservableObject {
                                 throw RecorderError.message("请先在「首次设置 → 云原神账号」保存账号和密码。")
                             }
                             self.status = "正在逐字输入钥匙串中的云原神账号，请暂勿操作键盘或切换窗口…"
+                            attemptedPasswordLogin = true
                             try await self.hud.hideForClick()
                             var result: SafariLoginResult
                             do {
@@ -1207,7 +1440,7 @@ final class AppModel: ObservableObject {
                                     self.status = "正在按首次设置中的授权勾选官方用户协议和隐私政策…"
                                     if !SafariLauncher.pressAgreement(window) {
                                         guard let point = SafariLauncher.agreementPoint(window) else {
-                                            throw RecorderError.message("已开启自动勾选协议，但无法确认官方协议复选框。请在 Safari 手动确认后继续；没有点击其他授权。")
+                                            throw AutomationAssistanceRequired("已开启自动勾选协议，但无法确认官方协议复选框。请在 Safari 手动确认后继续；没有点击其他授权。")
                                         }
                                         try await self.sendPointerInput(point, in: region)
                                     }
@@ -1220,7 +1453,7 @@ final class AppModel: ObservableObject {
                             catch { self.hud.restore(); throw error }
                             self.hud.restore()
                             guard result == .submitted else {
-                                throw RecorderError.message(result == .needsAgreement
+                                throw AutomationAssistanceRequired(result == .needsAgreement
                                     ? (self.settings.cloudAutoAcceptAgreements
                                         ? "未能确认官方协议已勾选，尚未提交登录。请在 Safari 手动确认后继续。"
                                         : "账号和密码已填写。请在「首次设置 → 云原神账号」开启自动勾选官方协议，或在 Safari 手动确认并登录，再点「继续检查并录制」。")
@@ -1231,7 +1464,7 @@ final class AppModel: ObservableObject {
                             try await Task.sleep(for: .seconds(3))
                             continue
                         }
-                        throw RecorderError.message("需要登录或验证码。请在 Mac mini 的 Safari 中完成验证，并进入收藏对局列表，再点「继续检查并录制」。")
+                        throw AutomationAssistanceRequired("需要登录或验证码。请在 Safari 手动完成验证后点击「恢复窗口并继续」；不会重填密码或代过验证。")
                     case .favorites:
                         self.status = "已找到收藏对局，正在复核页面和播放按钮…"
                         try await Task.sleep(for: .seconds(1.5))
@@ -1243,7 +1476,7 @@ final class AppModel: ObservableObject {
                         }.value
                         try Task.checkCancellation()
                         guard CloudLaunchPolicy.verified(lines, nextLines, rows: found) else {
-                            throw RecorderError.message("收藏列表或播放按钮尚未稳定确认。请检查当前页面后继续，或使用原来的手动录制入口。")
+                            throw AutomationAssistanceRequired("收藏列表或播放按钮尚未稳定确认。请显示完整列表后继续；没有开始录制。")
                         }
                         guard let restored = CloudLaunchPolicy.restoringChoices(
                             previousRows, in: found, freshPerspective: self.settings.autoStartPerspective
@@ -1264,7 +1497,7 @@ final class AppModel: ObservableObject {
                     case .princeDialogue:
                         let count = actions[state, default: 0]
                         guard count < 3, princeDialogueGuard.unconfirmedChoices < 3 else {
-                            throw RecorderError.message("未能稳定确认小王子的回放选项，已停止；没有按 F、滚动盲选或开始录制。请检查页面后继续。")
+                            throw AutomationAssistanceRequired("未能稳定确认小王子的回放选项，等待协助；没有按 F、滚动盲选或开始录制。请检查页面后继续。")
                         }
                         self.status = "已进入小王子选项，正在复核“观看一下对局回放”…"
                         try await Task.sleep(for: .milliseconds(450))
@@ -1287,7 +1520,7 @@ final class AppModel: ObservableObject {
                             try await self.sendPointerInput(point, in: navigationRegion, clickHoldMilliseconds: 250) {
                                 if let page = navigationPage {
                                     guard let current = SafariLauncher.cloudContentRect(window), GameViewport.samePageBounds(page, current) else {
-                                        throw RecorderError.message("游戏区域在确认对话选项后改变，尚未点击。")
+                                        throw NavigationPageChanged()
                                     }
                                 }
                             }
@@ -1299,7 +1532,7 @@ final class AppModel: ObservableObject {
                     case .princeGreeting:
                         let count = actions[state, default: 0]
                         guard count < 3, unconfirmedPrinceGreetings < 10 else {
-                            throw RecorderError.message("小王子的首句对白未能稳定推进，已停止；没有盲选其他对话。")
+                            throw AutomationAssistanceRequired("小王子的首句对白未能稳定推进，等待协助；没有盲选其他对话。")
                         }
                         self.status = "已看到小王子的首句对白，正在复核后推进；不会重复按 F…"
                         try await Task.sleep(for: .milliseconds(450))
@@ -1312,7 +1545,7 @@ final class AppModel: ObservableObject {
                         try await self.sendPointerInput(point, in: navigationRegion, clickHoldMilliseconds: 250) {
                             if let page = navigationPage {
                                 guard let current = SafariLauncher.cloudContentRect(window), GameViewport.samePageBounds(page, current) else {
-                                    throw RecorderError.message("游戏区域在确认对白后改变，尚未点击。")
+                                    throw NavigationPageChanged()
                                 }
                             }
                         }
@@ -1322,13 +1555,13 @@ final class AppModel: ObservableObject {
                     case .launcher, .gameEntry, .prince, .recentReplays, .replayEnd:
                         let count = actions[state, default: 0]
                         guard count < 3 else {
-                            throw RecorderError.message("在“\(state.rawValue)”页面尝试 3 次后未进入下一步，已停止；没有开始录制。请检查页面提示后继续。")
+                            throw AutomationAssistanceRequired("在“\(state.rawValue)”页面尝试 3 次后仍未进入下一步，等待协助；没有开始录制。请检查页面后继续。")
                         }
                         let point = state == .launcher ? CloudLaunchPolicy.startPoint(lines)
                             : state == .recentReplays ? CloudLaunchPolicy.recentTabKeyPoint(lines)
                             : CloudLaunchPolicy.navigationPoint(lines)
                         guard point != nil || state == .launcher else {
-                            throw RecorderError.message("已找到相关页面，但无法唯一确认下一步控件。请保持页面完整、无遮挡后继续。")
+                            throw AutomationAssistanceRequired("已找到相关页面，但无法唯一确认下一步控件。请保持页面完整、无遮挡后继续。")
                         }
                         try await self.hud.hideForClick()
                         do {
@@ -1336,18 +1569,18 @@ final class AppModel: ObservableObject {
                             case .launcher:
                                 self.status = "正在启动云原神，加载最多等待 6 分钟…"
                                 if try !SafariLauncher.pressStart(window) {
-                                    guard let point else { throw RecorderError.message("未能唯一确认官方启动按钮，尚未点击。") }
+                                    guard let point else { throw AutomationAssistanceRequired("未能唯一确认官方启动按钮，尚未点击；请检查后继续。") }
                                     try await self.sendPointerInput(point, in: region)
                                 }
                             case .prince, .recentReplays:
-                                guard let point else { throw RecorderError.message("游戏快捷键的页面依据已丢失，尚未发送。") }
+                                guard let point else { throw AutomationAssistanceRequired("游戏快捷键的页面依据已丢失，尚未发送；请检查后继续。") }
                                 self.status = state == .prince ? "已找到小王子，正在按 F 对话…"
                                     : "已进入最近对局，正在按 E 切换收藏…"
                                 try window.raise()
                                 try await Task.sleep(for: .milliseconds(300))
                                 let current = try region.resolved()
                                 let position = RegionGeometry.screenPoint(point, source: current.sourceRect, displayOrigin: CGDisplayBounds(current.displayID).origin)
-                                guard window.checkClick(position).allowed else { throw RecorderError.message("游戏快捷键的目标位置被遮挡，已停止。") }
+                                guard window.checkClick(position).allowed else { throw PointerInputDeferred(point: point, region: region, detail: "游戏快捷键的目标位置被遮挡，尚未输入") }
                                 let key: SafariLauncher.GameKey = state == .recentReplays ? .favorites : .interact
                                 try await SafariLauncher.pressGameKey(key, in: window, didSendKeyDown: {
                                     if state == .prince { princeInteractionSentAt = ProcessInfo.processInfo.systemUptime }
@@ -1357,7 +1590,7 @@ final class AppModel: ObservableObject {
                                     }
                                 }
                             default:
-                                guard let point else { throw RecorderError.message("未能确认导航按钮，尚未点击。") }
+                                guard let point else { throw AutomationAssistanceRequired("未能确认导航按钮，尚未点击；请检查后继续。") }
                                 self.status = state == .gameEntry ? "正在通过“点击进入”进入游戏…"
                                     : state == .replayEnd ? "正在返回上一场回放的收藏列表…" : "正在点击小王子首句台词，等待回放选项；不按 F…"
                                 try await self.sendPointerInput(point, in: region, clickHoldMilliseconds: 250)
@@ -1396,7 +1629,7 @@ final class AppModel: ObservableObject {
                                 if let (gameRegion, gameLines) = candidate, CloudLaunchPolicy.state(gameLines) == .prince {
                                     if let sentAt = princeInteractionSentAt {
                                         guard now - sentAt < 15 else {
-                                            throw RecorderError.message("已发送小王子对话按键，但未能确认后续界面；为避免误选，已停止。")
+                                            throw AutomationAssistanceRequired("已发送小王子对话按键，但未能确认后续界面；请检查后继续，不会重复按 F。")
                                         }
                                         self.status = "已发送小王子对话按键，正在等待对话界面；不会重复按 F…"
                                         continue
@@ -1410,7 +1643,7 @@ final class AppModel: ObservableObject {
                                           let live = SafariLauncher.cloudContentRect(window),
                                           GameViewport.samePageBounds(confirmed, live) else { continue }
                                     guard princeDialogueGuard.observe(.prince, at: ProcessInfo.processInfo.systemUptime) == .proceed else {
-                                        throw RecorderError.message("小王子对话状态不明确，尚未按 F。")
+                                        throw AutomationAssistanceRequired("小王子对话状态不明确，尚未按 F；请检查后继续。")
                                     }
                                     let current = try gameRegion.resolved()
                                     let position = RegionGeometry.screenPoint(point, source: current.sourceRect,
@@ -1420,7 +1653,7 @@ final class AppModel: ObservableObject {
                                     do {
                                         try window.raise()
                                         try await Task.sleep(for: .milliseconds(300))
-                                        guard window.checkClick(position).allowed else { throw RecorderError.message("小王子对话入口被遮挡，尚未按 F。") }
+                                        guard window.checkClick(position).allowed else { throw PointerInputDeferred(point: point, region: gameRegion, detail: "小王子对话入口被遮挡，尚未按 F") }
                                         try await SafariLauncher.pressGameKey(.interact, in: window, didSendKeyDown: { sent = true }) {
                                             guard self.session.unlocked, try gameRegion.resolved().globalRect == current.globalRect else {
                                                 throw RecorderError.message("桌面或游戏窗口已改变，已停止快捷键。")
@@ -1445,7 +1678,8 @@ final class AppModel: ObservableObject {
                                 if !attemptedMapNavigation, let (gameRegion, gameLines) = candidate, TavernNavigationEvidence.worldVisible(gameLines) {
                                     attemptedMapNavigation = true
                                     self.status = "已确认游戏画面，准备前往猫尾酒馆…"
-                                    try await self.navigateToTavern(window: window, region: gameRegion, page: confirmed, keepAlive: &navigationKeepAlive)
+                                    let suspended = try await self.navigateToTavern(window: window, region: gameRegion, page: confirmed, keepAlive: &navigationKeepAlive)
+                                    deadline = deadline.addingTimeInterval(suspended)
                                     continue
                                 }
                             }
@@ -1465,8 +1699,29 @@ final class AppModel: ObservableObject {
                         self.status = "正在等待游戏页面；进入猫尾酒馆后将识别小王子的 F 对话入口…"
                     }
                     try await Task.sleep(for: .seconds(2))
+                    } catch let deferred as PointerInputDeferred {
+                        actions = previousActions; princeDialogueGuard = previousDialogue
+                        let paused = Date()
+                        try await self.recoverInput(deferred)
+                        deadline = deadline.addingTimeInterval(Date().timeIntervalSince(paused))
+                        continue
+                    } catch is NavigationPageChanged {
+                        actions = previousActions; princeDialogueGuard = previousDialogue
+                        nextWorldProbe = 0
+                        continue
+                    } catch let help as AutomationAssistanceRequired {
+                        self.cloudLaunchPhase = .navigationHelp
+                        let paused = Date()
+                        try await self.awaitAssistance(help.message)
+                        deadline = deadline.addingTimeInterval(Date().timeIntervalSince(paused))
+                        // Explicit Continue authorizes another bounded attempt, not an
+                        // old click. Login attempts deliberately remain one per session.
+                        actions.removeAll(); princeDialogueGuard = PrinceDialogueGuard()
+                        unconfirmedPrinceGreetings = 0; princeInteractionSentAt = nil
+                        nextWorldProbe = 0; self.cloudLaunchPhase = .checking
+                        continue
+                    }
                 }
-                throw RecorderError.message("等待 6 分钟后仍未确认收藏对局。请检查云原神网络或排队状态；游戏中需靠近小王子并出现 F 提示。对话选择“观看一下对局回放”，再按 E 切到收藏后继续。")
             } catch is CancellationError {
                 self.cloudLaunchPhase = .cancelled
                 self.status = "已取消启动，尚未开始录制。"
@@ -1541,7 +1796,8 @@ final class AppModel: ObservableObject {
         try session.begin()
         lastSessionDiagnostic = ""
         sessionRunning = true; focusLostAt = nil; elapsed = 0; keepAliveCount = 0
-        addLog(region.windowID == nil ? "区域录制：窗口失焦会保护性停止" : settings.unattended ? "全窗口无人值守：远程连接可断开，桌面必须保持解锁" : "全窗口录制：允许 15 秒暂时失焦")
+        sessionCaptureRegion = region
+        addLog(region.windowID == nil ? "手动区域录制：仍需保持前台，避免录入其他应用" : "独立窗口录制：失焦和其他窗口遮挡不会中止；自动输入仍需确认目标安全")
         addLog("录制电脑已启用临时防休眠和后台运行保护；不依赖观看端 MacBook 保持亮屏，不阻止主动锁屏或合盖")
         if settings.showHUD { hud.show(model: self, displayID: region.displayID) }
     }
@@ -1564,7 +1820,7 @@ final class AppModel: ObservableObject {
             }
             return
         }
-        guard let region else { return }
+        guard let region = sessionCaptureRegion ?? region else { return }
         let app = targetApplication()
         let window = CaptureWindow.list(pid: app?.processIdentifier).first { $0.id == region.anchorWindowID }
         if app?.isActive == true {
@@ -1581,12 +1837,16 @@ final class AppModel: ObservableObject {
                                                         focusLostSeconds: focusLostAt.map { Date().timeIntervalSince($0) } ?? 0) {
                 throw RecorderError.message(reason)
             }
+            if sessionCaptureRegion == nil && !recording { return } // Navigation can rebind a resized window before capture.
             _ = try region.resolved()
             if let window, RecordingSafety.unavailableWindow(onScreen: window.onScreen, minimized: window.minimized,
                                                              fullWindow: region.windowID != nil, unattended: settings.unattended) {
                 throw RecorderError.message("目标窗口已最小化或区域不可见。已保存片段，请还原窗口后重新开始。")
             }
             if recording { try recorder.checkFailure() }
+            if recording, let deadline = activeTakeDeadline, ProcessInfo.processInfo.systemUptime >= deadline {
+                throw RecorderError.message("本局达到时长上限，已保存录像；等待恢复也不会无限录制。")
+            }
         } catch {
             addLog("捕获中断：\(recorder.diagnostic)；\(diagnostic)")
             interruption = error; stopping = true
@@ -1622,12 +1882,48 @@ final class AppModel: ObservableObject {
         else { fail(error) }
     }
     private func finishOperation() {
-        if cloudLaunchPhase == .recording { cloudLaunchPhase = .complete }
+        if cloudLaunchPhase == .recording {
+            cloudLaunchPhase = stopRequested ? .cancelled : (interruption != nil || error != nil) ? .needsFavorites : .complete
+        }
         if sessionRunning && settings.cloudKeepAlive { addLog("本批结束或停止：云原神保活与临时防睡眠已关闭") }
         sessionRunning = false; session.end(); hud.close(); focusLostAt = nil
-        busy = false; recording = false; keepAliveOnly = false; startedAt = nil; activeRow = nil; activePerspective = nil; perspectiveVerified = false; operation = nil
+        recording = false; startedAt = nil
+        sessionCaptureRegion = nil; activeTakeDeadline = nil; assistanceMessage = nil; assistanceContinued = false
+        if quietSession.needsCleanup {
+            operation = nil; stopping = true
+            Task { @MainActor in
+                if let message = await self.quietSession.end() {
+                    self.notificationQuietStatus = message; self.addLog(message)
+                }
+                self.quietRecoveryAvailable = self.quietSession.canRecover
+                self.finishOperationUI()
+            }
+            return
+        }
+        finishOperationUI()
+    }
+    private func finishOperationUI() {
+        busy = false; recording = false; keepAliveOnly = false; startedAt = nil; activeRow = nil; activePerspective = nil; perspectiveVerified = false; replayConfirmed = false; operation = nil
         stopping = false
         if session.unlocked { showWindow() }
+    }
+    private func prepareRecordingQuiet() async {
+        guard settings.quietNotifications else { return }
+        notificationQuietStatus = await quietSession.begin()
+        addLog(notificationQuietStatus)
+        quietRecoveryAvailable = quietSession.canRecover
+    }
+    func recoverNotificationSettings() {
+        guard !busy, quietRecoveryAvailable else { return }
+        busy = true
+        Task {
+            if let message = await quietSession.end(recoverPreviousSession: true) {
+                notificationQuietStatus = message; addLog(message)
+            }
+            quietRecoveryAvailable = quietSession.canRecover
+            busy = false
+            stopping = false
+        }
     }
     private func verifyRecording(_ url: URL, detail: String) async throws {
         try await Task { @MainActor in

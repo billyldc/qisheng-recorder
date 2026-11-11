@@ -33,7 +33,7 @@ struct CaptureWindow: Identifiable {
         }
         let bounds = CGDisplayBounds(ids[index])
         let local = crop ?? CGRect(origin: .zero, size: frame.size)
-        guard CGRect(origin: .zero, size: frame.size).contains(local), local.width >= 160, local.height >= 90 else {
+        guard RegionGeometry.validatedWindowCrop(selection: local, window: CGRect(origin: .zero, size: frame.size)) != nil else {
             throw RecorderError.message("游戏区域已超出窗口，请重新选择窗口。")
         }
         return CaptureRegion(displayID: ids[index], displaySize: bounds.size,

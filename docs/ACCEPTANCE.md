@@ -56,8 +56,10 @@ Interactive checks on a permitted Mac:
    exported video contains the same boundaries and audible game sound.
 4. Scan a favorites page, edit a name, record one replay. Check the edited name
    is in the filename and sidecar JSON. Repeat without overwriting the first take.
-5. Test an incorrectly calibrated play button: the batch must stop when the
-   favorites page remains. Confirm the failed attempt is preserved for diagnosis.
+5. Test an incorrectly calibrated play button: automatic retries must be bounded,
+   with a visible unconfirmed/waiting state while frames continue saving. Start
+   the matching replay manually and confirm fresh evidence allows continuation.
+   Stop and the per-take limit must still finalize the partial file.
 6. Stop a live recording from the menu bar and with Cmd+Shift+S. The MP4 must open.
    Quit while recording and verify file finalization before app exit.
 7. Calibrate 2x on the correct visible button. Confirm speed changes during a
@@ -77,7 +79,8 @@ Interactive checks on a permitted Mac:
 13. Switch speed on/off: detect existing 2x without toggling it off, prioritize
     manually calibrated coordinates, and continue with a log when speed is
     unconfirmed. Missing recognition must not abort the batch or trigger a
-    repeated click. Lock, real occlusion and capture failures still stop safely.
+    repeated click. Occlusion defers input until fresh evidence is available;
+    independent-window capture continues. Lock and capture failures still stop safely.
 14. Update references while online, then offline. Keep old references/settings,
     avoid rewriting bundle resources, and retry failed downloads without duplicates.
 15. With HUD enabled and unattended disabled, start a replay in region mode.
@@ -125,3 +128,25 @@ release's notes.
 
 `QishengRecorder --update-self-test` exercises temporary signed fixtures and
 subprocess cancellation, not the user's actual installation or GitHub login.
+
+## Unreleased resilience checks
+
+- `ReplayCoreChecks` enumerates 15,552 per-row choices, selection masks and global
+  overrides. Verify row-level both-view jobs, single-view order, no unselected
+  jobs, legacy JSON migration and preservation of manual edits after rescanning.
+- The seeded navigation test supplies 80,000 partial, duplicate, malformed and
+  delayed observations. It requires fresh paired evidence before movement or
+  arrival; an indoor map label never authorizes an outdoor teleport route.
+- `QishengRecorder --quiet-self-test` uses only a fake backend. It checks normal
+  cleanup, existing Focus, manual changes, partial application/cancellation,
+  restore failure and deliberate crash-journal recovery without changing macOS.
+- `QishengRecorder --capture-resilience-self-test` is an opt-in local live check,
+  not run by CI. It requires existing screen/accessibility permissions and never
+  requests them. It temporarily uses system Focus, records only its generated
+  window, adds an occluding panel, activates another app, decodes the MP4, then
+  restores Focus and releases power assertions. A failed cleanup must retain its
+  recovery journal. It never connects to a game or validates cloud keep-alive.
+- Live release acceptance still requires a permitted cloud session: outdoor
+  assistance/resumption, all selected rows, both orientations, interruption at
+  every click, menus/animations and delayed controls. Offline fixtures and the
+  synthetic-window test do not establish live game success.

@@ -6,21 +6,40 @@ public enum ReplayPerspective: String, Codable, CaseIterable, Sendable {
     public var requiresSwitch: Bool { self == .opponent }
 }
 
+/// A scheduling choice, never a physical playback orientation.
+public enum ReplayRecordingChoice: String, Codable, CaseIterable, Sendable {
+    case own, opponent, both
+    public var label: String {
+        switch self {
+        case .own: return "己方视角"
+        case .opponent: return "对方视角"
+        case .both: return "双方视角"
+        }
+    }
+    public func includes(_ perspective: ReplayPerspective) -> Bool {
+        self == .both || (perspective == .own ? self == .own : self == .opponent)
+    }
+}
+
 public enum ReplayRecordingPlan {
     public static func jobs(rows: [Replay], bothPerspectives: Bool) -> [Replay] {
         let selected = rows.filter(\.selected).sorted { $0.id < $1.id }
         func take(_ row: Replay, _ view: ReplayPerspective) -> Replay {
             var result = row
             result.recordingPerspective = view
+            result.recordingChoice = nil
             result.confirmedPerspective = nil
             result.perspectiveStatus = nil
             result.recordingOutcome = nil
+            result.recordingWarnings = nil
             return result
         }
-        if bothPerspectives {
-            return selected.map { take($0, .own) } + selected.map { take($0, .opponent) }
+        if bothPerspectives || selected.contains(where: { $0.preferredRecordingChoice == .both }) {
+            let own = selected.filter { bothPerspectives || $0.preferredRecordingChoice.includes(.own) }
+            let opponent = selected.filter { bothPerspectives || $0.preferredRecordingChoice.includes(.opponent) }
+            return own.map { take($0, .own) } + opponent.map { take($0, .opponent) }
         }
-        return selected.map { take($0, $0.preferredPerspective) }
+        return selected.map { take($0, $0.preferredRecordingChoice == .opponent ? .opponent : .own) }
     }
 }
 

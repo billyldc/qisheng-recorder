@@ -102,66 +102,59 @@ func checkTavernNavigation() throws {
     precondition(dialogue.observe(.unknown, at: .nan) == .stop)
 
     var flow = TavernNavigationFlow(at: 0)
-    func observe(_ lines: [TextLine], _ time: Double, _ icon: UnitPoint? = nil) -> TavernNavigationFlow.Action {
-        flow.observe(lines, width: 1324, height: 752, zoom: icon, at: time)
+    func observe(_ lines: [TextLine], _ time: Double) -> TavernNavigationFlow.Action {
+        flow.observe(lines, width: 1324, height: 752, zoom: nil, at: time)
     }
-    precondition(observe(world, 0) == .wait && observe(world, 1) == .openMap)
-    precondition(observe(layer, 2) == .wait && observe([], 2.5) == .wait && observe(layer, 3) == .wait)
-    guard case .click(_, .mapLayers) = observe(layer, 4) else { preconditionFailure("map layers") }
-    precondition(observe(regions, 5) == .wait)
-    guard case .click(_, .mondstadt) = observe(regions, 6) else { preconditionFailure("region") }
-    for index in 0..<8 {
-        let time = 7.0 + Double(index) * 2
-        precondition(observe(city, time, zoom) == .wait)
-        guard case .click(_, .zoom) = observe(city, time + 1, zoom) else { preconditionFailure("zoom") }
+    precondition(observe(world, 0) == .wait)
+    guard case .needsAssistance = observe(world, 1) else { preconditionFailure("An outdoor HUD does not prove a tavern teleport") }
+    precondition(flow.waitingForUser)
+    for time in 2...200 {
+        precondition(observe(time % 2 == 0 ? world : city, Double(time)) == .wait)
     }
-    precondition(observe(city, 23, zoom) == .wait)
-    guard case .click(_, .iconCluster) = observe(city, 24, zoom) else { preconditionFailure("cluster") }
-    precondition(observe(candidates, 25) == .wait)
-    guard case .click(_, .tavernCandidate) = observe(candidates, 26) else { preconditionFailure("tavern") }
-    precondition(observe(panel, 27) == .wait)
-    guard case .click(_, .teleport) = observe(panel, 28) else { preconditionFailure("teleport") }
-    precondition(observe(nearby, 31) == .wait && observe(nearby, 32) == .forward)
-    precondition(observe(prompt, 33) == .wait && observe(prompt, 34) == .arrived)
-    var blocked = TavernNavigationFlow(at: 0)
-    precondition(blocked.observe(world + [line("验证码", 0.4, 0.4)], width: 1324, height: 752, zoom: nil, at: 1) != .openMap)
+    precondition(observe(nearby, 201) == .wait && observe(nearby, 202) == .wait)
+    precondition(observe(nearby, 205) == .wait && observe(nearby, 206) == .forward)
+    precondition(observe(prompt, 207) == .wait && observe(prompt, 208) == .arrived)
+
     var missing = TavernNavigationFlow(at: 0)
-    precondition(missing.observe([], width: 1324, height: 752, zoom: nil, at: 26) != .openMap)
-    var nearbyFlow = TavernNavigationFlow(at: 0)
-    func near(_ lines: [TextLine], _ time: Double) -> TavernNavigationFlow.Action {
-        nearbyFlow.observe(lines, width: 1324, height: 752, zoom: nil, at: time)
+    guard case .needsAssistance = missing.observe([], width: 1324, height: 752, zoom: nil, at: 26) else {
+        preconditionFailure("Unknown input must wait for help, not exit")
     }
-    precondition(near(world, 0) == .wait && near(nearby, 1) == .wait && near(nearby, 2) == .wait)
-    precondition(near(nearby, 5) == .wait && near(nearby, 6) == .forward)
-    precondition(near(prompt, 7) == .wait && near(prompt, 8) == .arrived)
-    var retry = TavernNavigationFlow(at: 0)
-    func retryObserve(_ lines: [TextLine], _ time: Double) -> TavernNavigationFlow.Action {
-        retry.observe(lines, width: 1324, height: 752, zoom: nil, at: time)
+    precondition(missing.observe([], width: 1324, height: 752, zoom: nil, at: 6000) == .wait)
+    precondition(missing.observe(prompt, width: 1324, height: 752, zoom: nil, at: 6001) == .wait)
+    precondition(missing.observe(prompt, width: 1324, height: 752, zoom: nil, at: 6002) == .arrived)
+    var blocked = TavernNavigationFlow(at: 0)
+    guard case .needsAssistance = blocked.observe(world + [line("验证码", 0.4, 0.4)],
+        width: 1324, height: 752, zoom: nil, at: 1) else { preconditionFailure("Login requires user assistance") }
+    precondition(blocked.observe(prompt, width: 1324, height: 752, zoom: nil, at: 2) == .wait)
+    precondition(blocked.observe(prompt, width: 1324, height: 752, zoom: nil, at: 3) == .arrived)
+    for invalidTime in [Double.nan, .infinity, -1] {
+        var invalidClock = TavernNavigationFlow(at: 0)
+        guard case .stop = invalidClock.observe(nearby, width: 1324, height: 752, zoom: nil, at: invalidTime) else {
+            preconditionFailure("Invalid clock must never authorize movement")
+        }
     }
-    precondition(retryObserve(world, 0) == .wait && retryObserve(world, 1) == .openMap)
-    precondition(retryObserve(world, 4) == .wait && retryObserve(world, 5) == .wait)
-    retry.resetEvidence()
-    precondition(retryObserve(world, 6) == .wait && retryObserve(world, 7) == .retryMap)
-    precondition(retryObserve(world, 12) == .wait && retryObserve(world, 13) == .wait)
-    precondition(retryObserve(layer, 14) == .wait)
-    guard case .click(_, .mapLayers) = retryObserve(layer, 15) else { preconditionFailure("map after retry") }
-    var changedAfterKey = TavernNavigationFlow(at: 0)
-    precondition(changedAfterKey.observe(world, width: 1324, height: 752, zoom: nil, at: 0) == .wait)
-    let beforeMap = changedAfterKey
-    precondition(changedAfterKey.observe(world, width: 1324, height: 752, zoom: nil, at: 1) == .openMap)
-    changedAfterKey.pageChanged(from: beforeMap, inputSent: true)
-    precondition(changedAfterKey.observe(layer, width: 1324, height: 752, zoom: nil, at: 2) == .wait)
-    guard case .click(_, .mapLayers) = changedAfterKey.observe(layer, width: 1324, height: 752, zoom: nil, at: 3) else {
-        preconditionFailure("sent map key must advance without repeating it")
+    for damaged in [layer, regions, city, candidates, panel] {
+        var map = TavernNavigationFlow(at: 0)
+        _ = map.observe(damaged, width: 1324, height: 752, zoom: zoom, at: 0)
+        let action = map.observe(damaged, width: 1324, height: 752, zoom: zoom, at: 26)
+        guard case .needsAssistance = action else { preconditionFailure("Historical indoor map evidence must not become an outdoor route") }
     }
-    var changedBeforeKey = TavernNavigationFlow(at: 0)
-    precondition(changedBeforeKey.observe(world, width: 1324, height: 752, zoom: nil, at: 0) == .wait)
-    let beforeUnsentMap = changedBeforeKey
-    precondition(changedBeforeKey.observe(world, width: 1324, height: 752, zoom: nil, at: 1) == .openMap)
-    changedBeforeKey.pageChanged(from: beforeUnsentMap, inputSent: false)
-    precondition(changedBeforeKey.observe(layer, width: 1324, height: 752, zoom: nil, at: 2) == .wait)
-    precondition(changedBeforeKey.observe(world, width: 1324, height: 752, zoom: nil, at: 3) == .wait)
-    precondition(changedBeforeKey.observe(world, width: 1324, height: 752, zoom: nil, at: 4) == .openMap)
+    var moved = TavernNavigationFlow(at: 0)
+    func move(_ time: Double) -> TavernNavigationFlow.Action {
+        moved.observe(nearby, width: 1324, height: 752, zoom: nil, at: time)
+    }
+    precondition(move(0) == .wait && move(1) == .wait && move(4) == .wait)
+    let beforeUnsent = moved
+    precondition(move(5) == .forward)
+    moved.pageChanged(from: beforeUnsent, inputSent: false)
+    precondition(move(5.5) == .wait && move(6) == .forward)
+    let afterSent = moved
+    moved.pageChanged(from: beforeUnsent, inputSent: true)
+    precondition(move(7) == .wait && move(9) == .wait && move(10) == .forward)
+    precondition(move(13) == .wait && move(14) == .forward)
+    precondition(move(17) == .wait)
+    guard case .needsAssistance = move(18) else { preconditionFailure("Bounded approach must not walk forever") }
+    _ = afterSent
     let page = CGRect(x: 0, y: 90, width: 1324, height: 820)
     precondition(GameViewport.samePageBounds(page, page.offsetBy(dx: 0.5, dy: 0.5)))
     precondition(!GameViewport.samePageBounds(page, page.offsetBy(dx: 0, dy: 30)))

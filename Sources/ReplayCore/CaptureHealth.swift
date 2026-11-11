@@ -72,7 +72,7 @@ public struct ReplayProgressHealth {
             if pausedAt == nil { pausedAt = now }
         } else if playback == .running { pausedAt = nil }
         if let pausedAt, now - pausedAt >= 45 {
-            return "回放持续暂停，自动继续未能生效；片段已保留，不计为完整对局。"
+            return "回放持续暂停，自动继续尚未生效，需要检查播放状态。"
         }
         guard !pixels.isEmpty else { return nil }
         if let previous, previous.count == pixels.count {
@@ -80,7 +80,7 @@ public struct ReplayProgressHealth {
             if Double(difference) / Double(pixels.count) >= 3 { changedAt = now; self.previous = pixels }
         } else { changedAt = now; previous = pixels }
         if let changedAt, now - changedAt >= 90 {
-            return "牌桌画面超过 90 秒没有明显变化，可能已断流或卡住；片段已保留，请检查后重试。"
+            return "牌桌画面超过 90 秒没有明显变化，需要检查回放是否仍在播放。"
         }
         return nil
     }

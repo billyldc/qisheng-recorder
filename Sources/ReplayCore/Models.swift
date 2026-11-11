@@ -18,10 +18,15 @@ public struct Replay: Codable, Identifiable, Equatable, Sendable {
     public var playDetected = false
     public var manualCharacters: [Bool]?
     public var recordingPerspective: ReplayPerspective?
+    public var recordingChoice: ReplayRecordingChoice?
     public var confirmedPerspective: ReplayPerspective?
     public var perspectiveStatus: String?
     public var recordingOutcome: String?
+    public var recordingWarnings: [String]?
     public var preferredPerspective: ReplayPerspective { recordingPerspective ?? .own }
+    public var preferredRecordingChoice: ReplayRecordingChoice {
+        recordingChoice ?? (preferredPerspective == .opponent ? .opponent : .own)
+    }
     public init(id: Int, date: String, mode: String, left: [String], right: [String], play: UnitPoint) {
         self.id = id; self.date = date; self.mode = mode
         self.left = left; self.right = right; self.play = play
@@ -57,6 +62,12 @@ public enum Filename {
 }
 
 public enum RegionGeometry {
+    public static func validatedWindowCrop(selection: CGRect, window: CGRect) -> CGRect? {
+        guard [selection.minX, selection.minY, selection.width, selection.height,
+               window.minX, window.minY, window.width, window.height].allSatisfy(\.isFinite),
+              selection.width >= 160, selection.height >= 90, window.contains(selection) else { return nil }
+        return selection.offsetBy(dx: -window.minX, dy: -window.minY)
+    }
     public static func displayIndex(window: CGRect, displays: [CGRect]) -> Int? {
         displays.indices.filter { !window.intersection(displays[$0]).isEmpty }.max {
             let a = window.intersection(displays[$0]), b = window.intersection(displays[$1])
@@ -90,6 +101,11 @@ public struct TextLine: Codable, Sendable {
     public var y: Double
     public var width: Double
     public var height: Double
+    public var validUnitRect: Bool {
+        [x, y, width, height].allSatisfy(\.isFinite) &&
+        x >= 0 && y >= 0 && width > 0 && height > 0 &&
+        x + width <= 1 && y + height <= 1
+    }
     public init(text: String, x: Double, y: Double, width: Double, height: Double) {
         self.text = text; self.x = x; self.y = y; self.width = width; self.height = height
     }

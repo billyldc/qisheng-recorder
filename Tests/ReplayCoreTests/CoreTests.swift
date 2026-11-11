@@ -43,6 +43,9 @@ final class CoreTests {
         tests.testRecentCounterIsNeverFavorites()
         tests.testLaunchPreservesDeliberateReplayChoices()
         try tests.testPerspectivePlanAndLegacySidecars()
+        try checkReplayRecordingChoices()
+        checkInterruptionPolicies()
+        checkAdversarialNavigation()
         tests.testPerspectiveMenuRequiresExactSafeEntry()
         tests.testLaunchPreservesPerspectiveChoices()
         try tests.testPlaybackRecoveryNeverBlindlyToggles()
@@ -513,7 +516,7 @@ final class CoreTests {
     }
     func testFocusGraceOnlyAppliesToWindowCapture() {
         XCTAssertNil(RecordingSafety.interruption(unlocked: true, targetExists: true, fullWindow: true, unattended: false, focusLostSeconds: 14))
-        XCTAssertFalse(RecordingSafety.interruption(unlocked: true, targetExists: true, fullWindow: true, unattended: false, focusLostSeconds: 15) == nil)
+        XCTAssertNil(RecordingSafety.interruption(unlocked: true, targetExists: true, fullWindow: true, unattended: false, focusLostSeconds: 3600))
         XCTAssertFalse(RecordingSafety.interruption(unlocked: true, targetExists: true, fullWindow: false, unattended: true, focusLostSeconds: 1) == nil)
     }
     func testSpeedOCRRejectsCardNumbersAndAmbiguity() {

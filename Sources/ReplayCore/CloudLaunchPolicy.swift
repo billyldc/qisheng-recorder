@@ -15,8 +15,10 @@ public enum CloudLaunchPolicy {
     }
 
     public static func state(_ lines: [TextLine]) -> CloudPageState {
+        let rawText = lines.map { $0.text.filter { !$0.isWhitespace } }.joined(separator: "\n")
+        if ["验证码", "短信登录", "密码登录", "扫码登录", "手机号登录"].contains(where: rawText.contains) { return .login }
+        let lines = lines.filter(\.validUnitRect)
         let text = lines.map { $0.text.filter { !$0.isWhitespace } }.joined(separator: "\n")
-        if ["验证码", "短信登录", "密码登录", "扫码登录", "手机号登录"].contains(where: text.contains) { return .login }
         if text.contains("连接中断"), uniquePoint(lines, labels: ["退出游戏"]) != nil { return .disconnected }
         if ["每日登录奖励", "每日登陆奖励"].contains(where: text.contains), text.contains("免费时长"),
            uniquePoint(lines, labels: ["我知道了"]) != nil { return .dailyReward }
@@ -246,7 +248,7 @@ public enum CloudLaunchPolicy {
                 return result
             }
         }
-        let hasChoices = previous.contains { !$0.selected || $0.preferredPerspective != .own || $0.manualCharacters?.contains(true) == true }
+        let hasChoices = previous.contains { !$0.selected || $0.recordingChoice != nil || $0.preferredPerspective != .own || $0.manualCharacters?.contains(true) == true }
         let old = Dictionary(grouping: previous, by: { $0.date + "|" + $0.mode })
         let new = Dictionary(grouping: found, by: { $0.date + "|" + $0.mode })
         guard Set(old.keys) == Set(new.keys), old.values.allSatisfy({ $0.count == 1 }), new.values.allSatisfy({ $0.count == 1 }) else {
@@ -257,6 +259,7 @@ public enum CloudLaunchPolicy {
             let prior = old[item.date + "|" + item.mode]![0]
             result.selected = prior.selected
             result.recordingPerspective = prior.recordingPerspective
+            result.recordingChoice = prior.recordingChoice
             if let manual = prior.manualCharacters, manual.count == 6, prior.left.count == 3, prior.right.count == 3,
                result.left.count == 3, result.right.count == 3 {
                 for index in 0..<3 {

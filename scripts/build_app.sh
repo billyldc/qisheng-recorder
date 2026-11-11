@@ -45,6 +45,7 @@ else
 fi
 codesign --verify --deep --strict "$APP"
 "$APP/Contents/MacOS/QishengRecorder" --self-test
+"$APP/Contents/MacOS/QishengRecorder" --quiet-self-test
 "$APP/Contents/MacOS/QishengRecorder" --update-self-test
 "$APP/Contents/MacOS/QishengRecorder" --review-self-test
 "$APP/Contents/MacOS/QishengRecorder" --gallery-self-test
