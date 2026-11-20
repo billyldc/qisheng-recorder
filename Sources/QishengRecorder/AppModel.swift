@@ -314,17 +314,32 @@ final class AppModel: ObservableObject {
     }
 
     func useWindow(_ window: CaptureWindow) {
+        guard !busy, !selectionActive else { return }
         choosingWindow = false
-        do {
-            if choosingKeepAliveWindow {
-                keepAliveTarget = try KeepAliveTarget(window: window, bundleID: settings.targetBundleID)
-                choosingKeepAliveWindow = false
-                let start = startAfterKeepAliveSelection
-                startAfterKeepAliveSelection = false
-                status = "已校准保活页面：\(keepAliveTarget!.label)"
-                if start { startKeepAlive() }
-                return
+        if choosingKeepAliveWindow {
+            let start = startAfterKeepAliveSelection
+            choosingKeepAliveWindow = false; startAfterKeepAliveSelection = false
+            keepAliveTarget = nil
+            busy = true; stopRequested = false; stopping = false; interruption = nil; error = nil
+            status = "正在重新核对所选窗口和标签，等待全屏工具栏稳定…"
+            operation = Task {
+                var startWhenReady = false
+                defer {
+                    self.finishOperation()
+                    if startWhenReady { self.startKeepAlive() }
+                }
+                do {
+                    let target = try await KeepAliveTarget.bind(window: window, bundleID: self.settings.targetBundleID)
+                    try Task.checkCancellation()
+                    self.keepAliveTarget = target
+                    self.status = "已校准保活页面：\(target.label)"
+                    startWhenReady = start
+                } catch is CancellationError { self.status = "已取消保活校准，没有发送游戏操作。" }
+                catch { self.fail(error) }
             }
+            return
+        }
+        do {
             region = try window.region()
             rows = []; preview = nil
             scan()

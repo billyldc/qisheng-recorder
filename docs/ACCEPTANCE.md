@@ -131,6 +131,16 @@ subprocess cancellation, not the user's actual installation or GitHub login.
 
 ## Unreleased resilience checks
 
+- `QishengRecorder --keepalive-self-test` checks AX identity deduplication,
+  repeated paths and rejection of genuinely ambiguous selection, without input.
+  With `QISHENG_LIVE_KEEPALIVE_BINDING=1`, it additionally reads one current
+  official Chrome window and runs production binding with a deliberately stale
+  fullscreen snapshot. It does not activate windows or send input by default.
+  `QISHENG_LIVE_KEEPALIVE_PULSES=1` explicitly opts into a bounded, local live
+  check of the actual AppModel window-selection/start/three move-only pulses/Stop
+  workflow. It requires existing permissions, does not log in or record, keeps
+  settings in memory, and must stop/release session protection even on failure.
+
 - `ReplayCoreChecks` enumerates 15,552 per-row choices, selection masks and global
   overrides. Verify row-level both-view jobs, single-view order, no unselected
   jobs, legacy JSON migration and preservation of manual edits after rescanning.

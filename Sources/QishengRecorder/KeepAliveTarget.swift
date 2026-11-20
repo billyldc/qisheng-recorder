@@ -12,6 +12,37 @@ final class KeepAliveTarget {
     private let document: AXUIElement?
     var usesDocumentBinding: Bool { document != nil }
 
+    static func bind(window selected: CaptureWindow, bundleID: String) async throws -> KeepAliveTarget {
+        var previous: KeepAliveTarget?
+        var lastError: Error = RecorderError.message("浏览器窗口仍在变化，请稍后重选。")
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        for _ in 0..<6 {
+            try Task.checkCancellation()
+            guard AXIsProcessTrusted(), NSRunningApplication(processIdentifier: selected.ownerPID)?.bundleIdentifier == bundleID,
+                  let window = CaptureWindow.list(pid: selected.ownerPID).first(where: { $0.id == selected.id }) else {
+                throw RecorderError.message("保活目标已关闭或权限失效，请重新选择窗口。")
+            }
+            do {
+                let current = try KeepAliveTarget(window: window, bundleID: bundleID)
+                if let previous, current.sameBinding(as: previous) { return current }
+                previous = current
+            } catch { previous = nil; lastError = error }
+            guard ProcessInfo.processInfo.systemUptime < deadline else { break }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        throw lastError
+    }
+
+    private func sameBinding(as other: KeepAliveTarget) -> Bool {
+        guard windowID == other.windowID, ownerPID == other.ownerPID, bundleID == other.bundleID else { return false }
+        switch (tab, other.tab, document, other.document) {
+        case let (left?, right?, nil, nil): return CFEqual(left, right)
+        case let (nil, nil, left?, right?): return CFEqual(left, right)
+        case (nil, nil, nil, nil): return true
+        default: return false
+        }
+    }
+
     init(window: CaptureWindow, bundleID: String) throws {
         windowID = window.id; ownerPID = window.ownerPID; self.bundleID = bundleID
         let tabs = try window.browserTabs()
@@ -64,7 +95,7 @@ final class KeepAliveTarget {
         selection(element) == true
     }
 
-    private static func selection(_ element: AXUIElement) -> Bool? {
+    static func selection(_ element: AXUIElement) -> Bool? {
         var known = false
         for key in [kAXValueAttribute, kAXSelectedAttribute] {
             var value: CFTypeRef?

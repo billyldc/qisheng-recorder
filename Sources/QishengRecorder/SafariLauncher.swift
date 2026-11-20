@@ -49,9 +49,11 @@ enum SafariLauncher {
     static func cloudDocumentForKeepAlive(_ window: CaptureWindow) -> AXUIElement? {
         guard let root = try? window.accessibilityWindow() else { return nil }
         var queue = [(root, 0)], pages: [AXUIElement] = []
-        var visited = 0
-        while let (element, depth) = queue.popLast(), visited < 1500 {
-            visited += 1
+        var visited = AccessibilityIdentitySet()
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while let (element, depth) = queue.popLast() {
+            if !visited.insert(element) { continue }
+            guard visited.count <= 1500, ProcessInfo.processInfo.systemUptime < deadline else { return nil }
             if string(element, kAXRoleAttribute) == "AXWebArea" {
                 var hidden: CFTypeRef?
                 _ = AXUIElementCopyAttributeValue(element, "AXHidden" as CFString, &hidden)
@@ -60,12 +62,14 @@ enum SafariLauncher {
                 // Frames inside the document are not additional browser tabs.
                 continue
             }
-            guard depth < 14 else { continue }
             var value: CFTypeRef?
             if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
-               let children = value as? [AXUIElement] { queue.append(contentsOf: children.map { ($0, depth + 1) }) }
+               let children = value as? [AXUIElement] {
+                guard children.isEmpty || depth < 14 else { return nil }
+                queue.append(contentsOf: children.map { ($0, depth + 1) })
+            }
         }
-        guard visited < 1500, queue.isEmpty, pages.count == 1,
+        guard pages.count == 1,
               elementURL(pages[0]).map(CloudLaunchPolicy.allowed) == true else { return nil }
         return pages[0]
     }

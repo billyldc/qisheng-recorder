@@ -63,7 +63,10 @@ struct CaptureWindow: Identifiable {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement] else { throw RecorderError.message("无法访问目标窗口，请检查辅助功能权限。") }
-        var matches = windows.filter { window in
+        var uniqueWindows: [AXUIElement] = []
+        var windowIdentities = AccessibilityIdentitySet()
+        for window in windows where windowIdentities.insert(window) { uniqueWindows.append(window) }
+        var matches = uniqueWindows.filter { window in
             var position: CFTypeRef?, size: CFTypeRef?
             guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &position) == .success,
                   AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &size) == .success,
@@ -87,17 +90,29 @@ struct CaptureWindow: Identifiable {
     func browserTabs() throws -> [AXUIElement] {
         var result: [AXUIElement] = []
         var queue: [(AXUIElement, Bool, Int)] = [(try accessibilityWindow(), false, 0)]
-        var visited = 0
-        while let (element, inGroup, depth) = queue.popLast(), visited < 1500 {
-            visited += 1
+        var visited = AccessibilityIdentitySet()
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while let (element, inGroup, depth) = queue.popLast() {
+            // Chrome exposes the same tab through several AXChildren paths.
+            // Deduplicate identity, not titles: distinct same-named tabs remain distinct.
+            if !visited.insert(element) { continue }
+            guard visited.count <= 1500, ProcessInfo.processInfo.systemUptime < deadline else {
+                throw RecorderError.message("读取浏览器标签超时或信息不完整，请稍后重试；没有猜测标签。")
+            }
             var roleValue: CFTypeRef?
             guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue) == .success,
-                  let role = roleValue as? String, role != "AXWebArea", depth < 12 else { continue }
+                  let role = roleValue as? String else {
+                throw RecorderError.message("浏览器控件正在变化，尚未确认保活标签。")
+            }
+            if role == "AXWebArea" { continue }
             let group = inGroup || role == "AXTabGroup"
             if group && ["AXRadioButton", "AXTab", "AXTabButton"].contains(role) { result.append(element); continue }
             var children: CFTypeRef?
             if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success,
                let children = children as? [AXUIElement] {
+                guard children.isEmpty || depth < 14 else {
+                    throw RecorderError.message("浏览器标签结构过深，信息不完整；请显示标签栏后重试。")
+                }
                 queue.append(contentsOf: children.map { ($0, group, depth + 1) })
             }
         }

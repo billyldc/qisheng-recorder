@@ -28,6 +28,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runNotificationQuietSelfTest()
             return
         }
+        if CommandLine.arguments.contains("--keepalive-self-test") {
+            runKeepAliveSelfTest()
+            return
+        }
         if CommandLine.arguments.contains("--capture-resilience-self-test") {
             runCaptureResilienceSelfTest()
             return
