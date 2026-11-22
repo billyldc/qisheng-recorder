@@ -1,5 +1,30 @@
 import Foundation
 
+public struct FocusPanelNavigation {
+    public enum Action: Equatable { case wait, open, expand, ready }
+    private var opened = false
+    private var expanded = false
+    private var headerHits = 0
+    private var sawPanel = false
+    private var emptyHits = 0
+    public init() {}
+
+    public mutating func observe(header: Bool, module: Bool) -> Action {
+        headerHits = header ? headerHits + 1 : 0
+        emptyHits = header || module ? 0 : emptyHits + 1
+        if header || module { sawPanel = true }
+        if headerHits >= 2 { return .ready }
+        if header { return .wait }
+        if module && !expanded { expanded = true; return .expand }
+        // Closing panels can leave one outgoing AX snapshot. Reopen only after
+        // observing that it has gone, never by toggling an unobserved mode.
+        if !module && !opened && (!sawPanel || emptyHits >= 6) {
+            opened = true; expanded = false; return .open
+        }
+        return .wait
+    }
+}
+
 public struct SystemFocusRow {
     public let id: String
     public let frame: CGRect

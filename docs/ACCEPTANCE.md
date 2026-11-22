@@ -162,6 +162,14 @@ subprocess cancellation, not the user's actual installation or GitHub login.
   override the overlay exception. A browser-media experiment is documented
   separately in [BROWSER-CAPTURE.md](BROWSER-CAPTURE.md); it is not a game or
   actual notification-delivery acceptance test.
+- Focus-panel navigation covers outgoing headers, outgoing modules, normal
+  expansion animation and a permanently absent panel; only one reopen is
+  permitted. The live synthetic-video check normalizes global tone changes
+  while requiring contrast and unchanged spatial structure; flat/partial white
+  covers are negative controls. Cleanup failure is reported even if a capture
+  failure already exists. A private test recovery journal can be restored with
+  `QISHENG_FOCUS_RECOVERY_JOURNAL` plus `QISHENG_FOCUS_RECOVERY_ONLY=1`, without
+  starting another capture or quiet session.
 - Live release acceptance still requires a permitted cloud session: outdoor
   assistance/resumption, all selected rows, both orientations, interruption at
   every click, menus/animations and delayed controls. Offline fixtures and the

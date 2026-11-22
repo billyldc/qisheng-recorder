@@ -45,6 +45,11 @@ any mode toggle. Expanded duration options reuse their parent identifier; the
 main row must be taller, above and aligned with the smaller duration rows.
 Ambiguous layouts are rejected rather than guessed.
 
+Panel navigation requires two consecutive expanded-header observations. A
+disappearing panel is allowed to finish animating before a single bounded menu
+reopen; stale AX nodes cannot leave the loop waiting on a panel already closed.
+This navigation state never authorizes a mode toggle by itself.
+
 The original mode is journaled before enabling Do Not Disturb, including when
 another Focus is already active. A second read must confirm DND before a take
 or its Play click begins. Failure waits for explicit assistance/recheck instead

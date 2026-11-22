@@ -32,6 +32,21 @@ private func rightPixels(_ image: CGImage) throws -> [UInt8] {
     return Array(UnsafeBufferPointer(start: bytes.assumingMemoryBound(to: UInt8.self), count: 48 * 48))
 }
 
+private func patternDifference(_ actual: [UInt8], _ expected: [UInt8]) -> Double? {
+    guard !actual.isEmpty, actual.count == expected.count else { return nil }
+    func standardized(_ bytes: [UInt8]) -> [Double]? {
+        let values = bytes.map(Double.init)
+        let mean = values.reduce(0, +) / Double(values.count)
+        let deviation = sqrt(values.reduce(0) { $0 + pow($1 - mean, 2) } / Double(values.count))
+        guard deviation >= 8 else { return nil }
+        return values.map { ($0 - mean) / deviation }
+    }
+    guard let a = standardized(actual), let b = standardized(expected) else { return nil }
+    // ColorSync can change the first encoded frame's tone. Compare spatial
+    // structure with contrast required, so a flat or partially white cover fails.
+    return sqrt(zip(a, b).reduce(0) { $0 + pow($1.0 - $1.1, 2) } / Double(a.count))
+}
+
 private func validateSyntheticVideo(_ url: URL) async throws -> (frames: Int, duration: Double, maxGap: Double, maxPixelDifference: Double) {
     let asset = AVURLAsset(url: url)
     guard let track = try await asset.loadTracks(withMediaType: .video).first else {
@@ -59,11 +74,12 @@ private func validateSyntheticVideo(_ url: URL) async throws -> (frames: Int, du
             throw RecorderError.message("Decoded frame has no pixels")
         }
         let pixels = try rightPixels(image)
-        // Compare in the decoded stream's color space, not screenshot RGB vs H.264 YUV.
         if expectedPixels == nil { expectedPixels = pixels }
-        let difference = Double(zip(pixels, expectedPixels!).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }) / Double(pixels.count)
+        guard let difference = patternDifference(pixels, expectedPixels!) else {
+            throw RecorderError.message("Decoded synthetic pattern is blank or has lost its contrast at \(time)s")
+        }
         maxDifference = max(maxDifference, difference)
-        guard difference < 5 else { throw RecorderError.message("Decoded video contains an unexpected occluding layer at \(time)s (difference \(difference))") }
+        guard difference < 0.15 else { throw RecorderError.message("Decoded video contains an unexpected occluding layer at \(time)s (pattern error \(difference))") }
         if previous.isFinite { maxGap = max(maxGap, time - previous) }
         previous = time; frames += 1
     }
@@ -77,6 +93,10 @@ private func validateSyntheticVideo(_ url: URL) async throws -> (frames: Int, du
 @MainActor
 func runCaptureResilienceSelfTest() {
     Task {
+        let reference: [UInt8] = [20, 20, 80, 80, 20, 20, 80, 80]
+        precondition(patternDifference([40, 40, 160, 160, 40, 40, 160, 160], reference)! < 0.001)
+        precondition(patternDifference(Array(repeating: 255, count: 8), reference) == nil)
+        precondition(patternDifference([255, 255, 255, 255, 20, 20, 80, 80], reference)! > 0.15)
         guard CGPreflightScreenCaptureAccess(), AXIsProcessTrusted() else {
             print("SKIP: live capture needs existing screen/accessibility access; no permission was requested")
             exit(2)
@@ -111,6 +131,11 @@ func runCaptureResilienceSelfTest() {
                 guard recovery.canRecover else { throw RecorderError.message("Requested test recovery journal is unavailable") }
                 print(await recovery.end(recoverPreviousSession: true) ?? "No recovery needed")
                 guard !recovery.canRecover else { throw RecorderError.message("Previous test Focus restoration failed") }
+                if ProcessInfo.processInfo.environment["QISHENG_FOCUS_RECOVERY_ONLY"] == "1" {
+                    print("PASS: previous test Focus restored; no new capture or Focus session")
+                    NSApp.terminate(nil)
+                    return
+                }
             }
             original = try await backend.read()
             let message = await quiet.begin()
@@ -155,7 +180,7 @@ func runCaptureResilienceSelfTest() {
             try await recorder.stop()
             let decoded = try await validateSyntheticVideo(movie)
             report = ["frames": decoded.frames, "duration": decoded.duration, "maximum_frame_gap": decoded.maxGap,
-                      "maximum_decoded_overlay_difference": decoded.maxPixelDifference,
+                      "maximum_decoded_pattern_error": decoded.maxPixelDifference,
                       "overlay_pixel_difference": difference, "captured_only_synthetic_window": true,
                       "focus_lost_without_stopping": true, "movie": movie.path]
         } catch { failure = error }
@@ -173,7 +198,9 @@ func runCaptureResilienceSelfTest() {
                 guard try await backend.read() == original, !quiet.canRecover else {
                     throw RecorderError.message("Live focus restoration could not be confirmed; recovery journal retained")
                 }
-            } catch { if failure == nil { failure = error } }
+            } catch {
+                failure = RecorderError.message("\(failure?.localizedDescription ?? "Capture completed"); cleanup: \(error.localizedDescription)")
+            }
         }
         if let failure {
             fputs("FAIL: \(failure.localizedDescription); diagnostics: \(directory.path)\n", stderr)

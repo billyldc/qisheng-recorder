@@ -53,6 +53,7 @@ final class SystemRecordingFocus: RecordingFocusBackend {
             guard ProcessInfo.processInfo.systemUptime < deadline else { return nil }
             if value(node, "AXIdentifier") as? String == id { found.append(node) }
         }
+        if id == menuID, found.count != 1 { trace("control-center menu matches=\(found.count)") }
         // The heading and its container share an ID. Both expose only panel
         // navigation actions, not a mode toggle; snapshot() validates mode rows.
         if id == headerID { return found.first }
@@ -151,26 +152,29 @@ final class SystemRecordingFocus: RecordingFocusBackend {
             }.value
         }
         do {
-            if unique(moduleID, in: root) == nil && unique(headerID, in: root) == nil {
-                try Task.checkCancellation()
-                try press(menu); opened = true
-                try await Task.sleep(for: .milliseconds(400))
-            }
-            let deadline = ProcessInfo.processInfo.systemUptime + 6
-            for attempt in 0..<15 {
+            var navigation = FocusPanelNavigation()
+            let deadline = ProcessInfo.processInfo.systemUptime + 8
+            for attempt in 0..<24 {
                 try Task.checkCancellation()
                 guard ProcessInfo.processInfo.systemUptime < deadline else { break }
                 let header = unique(headerID, in: root) != nil
-                trace("panel poll \(attempt): header=\(header), expansion_sent=\(expanded)")
-                if header {
+                let module = unique(moduleID, in: root)
+                let next = navigation.observe(header: header, module: module != nil)
+                trace("panel poll \(attempt): header=\(header), module=\(module != nil), action=\(next)")
+                switch next {
+                case .ready:
                     let result = try await body(root)
                     await cleanup()
                     return result
-                }
-                if !expanded, let module = unique(moduleID, in: root),
-                   let show = action(module, containing: ["show details", "显示详情", "显示详细信息"]) {
+                case .open:
+                    try press(menu); opened = true; expanded = false
+                    try await Task.sleep(for: .milliseconds(400))
+                case .expand:
+                    guard let module, let show = action(module, containing: ["show details", "显示详情", "显示详细信息"]) else {
+                        throw RecorderError.message("专注模式展开操作无法唯一确认，没有切换模式。")
+                    }
                     try press(module, action: show); expanded = true
-                    trace("sent show-details action")
+                case .wait: break
                 }
                 try await Task.sleep(for: .milliseconds(150))
             }

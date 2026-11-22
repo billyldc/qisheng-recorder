@@ -2,6 +2,30 @@ import Foundation
 import ReplayCore
 
 func checkInterruptionPolicies() {
+    var outgoingPanel = FocusPanelNavigation()
+    precondition(outgoingPanel.observe(header: true, module: false) == .wait)
+    for _ in 0..<5 { precondition(outgoingPanel.observe(header: false, module: false) == .wait) }
+    precondition(outgoingPanel.observe(header: false, module: false) == .open)
+    precondition(outgoingPanel.observe(header: false, module: false) == .wait)
+    precondition(outgoingPanel.observe(header: false, module: true) == .expand)
+    precondition(outgoingPanel.observe(header: false, module: true) == .wait)
+    precondition(outgoingPanel.observe(header: true, module: false) == .wait)
+    precondition(outgoingPanel.observe(header: true, module: false) == .ready)
+    var outgoingModule = FocusPanelNavigation()
+    precondition(outgoingModule.observe(header: false, module: true) == .expand)
+    for _ in 0..<5 { precondition(outgoingModule.observe(header: false, module: false) == .wait) }
+    precondition(outgoingModule.observe(header: false, module: false) == .open)
+    precondition(outgoingModule.observe(header: false, module: true) == .expand)
+    precondition(outgoingModule.observe(header: true, module: false) == .wait)
+    precondition(outgoingModule.observe(header: true, module: false) == .ready)
+    var expandingPanel = FocusPanelNavigation()
+    precondition(expandingPanel.observe(header: false, module: true) == .expand)
+    for _ in 0..<5 { precondition(expandingPanel.observe(header: false, module: false) == .wait) }
+    precondition(expandingPanel.observe(header: true, module: false) == .wait)
+    precondition(expandingPanel.observe(header: true, module: false) == .ready)
+    var absentPanel = FocusPanelNavigation()
+    precondition(absentPanel.observe(header: false, module: false) == .open)
+    for _ in 0..<100 { precondition(absentPanel.observe(header: false, module: false) == .wait) }
     let dnd = SystemFocusState.doNotDisturb
     let off = SystemFocusState(activeID: nil)
     precondition(RecordingSafety.notificationOverlay(bundleID: "com.apple.notificationcenterui"))
