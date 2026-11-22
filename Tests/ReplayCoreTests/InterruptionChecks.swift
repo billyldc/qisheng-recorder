@@ -4,6 +4,17 @@ import ReplayCore
 func checkInterruptionPolicies() {
     let dnd = SystemFocusState.doNotDisturb
     let off = SystemFocusState(activeID: nil)
+    precondition(RecordingSafety.notificationOverlay(bundleID: "com.apple.notificationcenterui"))
+    precondition(RecordingSafety.notificationOverlay(bundleID: "com.apple.controlcenter"))
+    precondition(!RecordingSafety.notificationOverlay(bundleID: "com.apple.Safari"))
+    precondition(!RecordingSafety.notificationOverlay(bundleID: "com.apple.some-other-app"))
+    precondition(!RecordingSafety.notificationOverlay(bundleID: nil))
+    precondition(RecordingSafety.interruption(unlocked: true, targetExists: true, fullWindow: false,
+        unattended: false, focusLostSeconds: 60, excludedSystemOverlay: true) == nil)
+    precondition(RecordingSafety.interruption(unlocked: false, targetExists: true, fullWindow: false,
+        unattended: false, focusLostSeconds: 60, excludedSystemOverlay: true) != nil)
+    precondition(RecordingSafety.interruption(unlocked: true, targetExists: false, fullWindow: false,
+        unattended: false, focusLostSeconds: 60, excludedSystemOverlay: true) != nil)
     let work = SystemFocusState(activeID: "focus-mode-activity-test-work")
     let personal = SystemFocusState(activeID: "focus-mode-activity-test-personal")
     precondition(NotificationQuietLease(previous: .init(activeID: dnd)) == nil)

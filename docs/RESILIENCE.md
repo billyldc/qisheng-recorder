@@ -1,4 +1,4 @@
-# Automation Recovery (Unreleased)
+# Automation Recovery (1.7)
 
 Recording and automation are separate concerns. Saving frames does not prove
 that a replay has entered, playback is running or the requested side is visible.
@@ -45,13 +45,25 @@ any mode toggle. Expanded duration options reuse their parent identifier; the
 main row must be taller, above and aligned with the smaller duration rows.
 Ambiguous layouts are rejected rather than guessed.
 
-An existing Focus and its schedule are preserved. Otherwise the original state
-is journaled before enabling Do Not Disturb. Finalization uses uncancelled
-cleanup; only the mode still owned by this operation is restored. User changes
-are preserved. Failed restoration leaves an explicit recovery action. Corrupt
-journals block further automatic toggles, and are cleared only after manual
-restoration has been observed. System notification exceptions and cross-device
-Focus sharing still apply.
+The original mode is journaled before enabling Do Not Disturb, including when
+another Focus is already active. A second read must confirm DND before a take
+or its Play click begins. Failure waits for explicit assistance/recheck instead
+of silently recording without the requested protection. Crash-journal recovery
+also requires explicit continuation. Already-active DND is not owned or disabled.
+Finalization uses uncancelled cleanup; only the mode still owned by this
+operation is restored. User changes are preserved. Failed restoration leaves
+an explicit recovery action. Corrupt journals block further automatic toggles,
+and are cleared only after manual restoration has been observed. The app does
+not reconstruct system countdowns or schedules. Notification exceptions and
+cross-device Focus sharing still apply; critical/security alerts are not
+guaranteed suppressed.
+
+Independent-window capture excludes other windows. Display-region capture
+explicitly excludes the recorder, Notification Center and Control Center.
+Only the two exact system overlay bundle IDs may bypass region focus loss;
+unrelated apps, unknown IDs, locks and missing targets retain their safety stop.
+Exclusion does not authorize input through an overlay or enlarge the selected
+capture region, and does not filter system notification sounds.
 
 ## Evidence Boundaries
 

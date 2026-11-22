@@ -66,7 +66,7 @@ private struct RecordingHUDView: View {
                 }
             }.frame(height: 49, alignment: .topLeading)
             if model.assistanceMessage != nil {
-                Button(action: model.continueAutomation) { Label("恢复窗口并继续", systemImage: "play.fill") }
+                Button(action: model.continueAutomation) { Label(model.assistanceButtonTitle, systemImage: "play.fill") }
                     .help("恢复窗口后重新识别，不点击未知弹窗，不补发旧坐标。")
             }
             HStack {

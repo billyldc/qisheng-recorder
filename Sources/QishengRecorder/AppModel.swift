@@ -40,6 +40,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var quietRecoveryAvailable = false
     @Published private(set) var notificationQuietStatus = ""
     @Published var assistanceMessage: String?
+    @Published private(set) var assistanceButtonTitle = "恢复窗口并继续"
+    private var assistanceRestoresWindow = true
     private var assistanceContinued = false
     @Published private(set) var keepAliveCount = 0
     @Published private(set) var keepAliveOnly = false
@@ -570,18 +572,22 @@ final class AppModel: ObservableObject {
     func continueAutomation() {
         guard busy, !stopping, session.unlocked else { return }
         assistanceContinued = true
-        if let selected = sessionCaptureRegion ?? region,
+        if assistanceRestoresWindow, let selected = sessionCaptureRegion ?? region,
            let window = CaptureWindow.list(pid: selected.anchorOwnerPID).first(where: { $0.id == selected.anchorWindowID }) {
             do { try window.raise() }
             catch { addLog("窗口尚未恢复，将继续等待；没有发送游戏点击。") }
         }
     }
 
-    private func awaitAssistance(_ message: String) async throws {
+    private func awaitAssistance(_ message: String, buttonTitle: String = "恢复窗口并继续", restoreWindow: Bool = true) async throws {
         assistanceContinued = false
+        assistanceButtonTitle = buttonTitle; assistanceRestoresWindow = restoreWindow
         assistanceMessage = message
         status = message
-        defer { assistanceMessage = nil; assistanceContinued = false }
+        defer {
+            assistanceMessage = nil; assistanceContinued = false
+            assistanceButtonTitle = "恢复窗口并继续"; assistanceRestoresWindow = true
+        }
         while !assistanceContinued {
             try Task.checkCancellation()
             guard session.unlocked else { throw RecorderError.message("桌面已锁定，已停止自动操作。") }
@@ -905,7 +911,7 @@ final class AppModel: ObservableObject {
             defer { self.finishOperation() }
             var url: URL?
             do {
-                await self.prepareRecordingQuiet()
+                try await self.prepareRecordingQuiet()
                 try Task.checkCancellation()
                 try self.focusTarget()
                 self.mainWindow?.orderOut(nil)
@@ -949,7 +955,7 @@ final class AppModel: ObservableObject {
             defer { self.finishOperation() }
             var currentURL: URL?
             do {
-                await self.prepareRecordingQuiet()
+                try await self.prepareRecordingQuiet()
                 try Task.checkCancellation()
                 try self.focusTarget()
                 self.mainWindow?.orderOut(nil)
@@ -1849,7 +1855,8 @@ final class AppModel: ObservableObject {
             try session.checkProtection()
             if let reason = RecordingSafety.interruption(unlocked: session.unlocked, targetExists: app != nil && window != nil,
                                                         fullWindow: region.windowID != nil, unattended: settings.unattended,
-                                                        focusLostSeconds: focusLostAt.map { Date().timeIntervalSince($0) } ?? 0) {
+                                                        focusLostSeconds: focusLostAt.map { Date().timeIntervalSince($0) } ?? 0,
+                                                        excludedSystemOverlay: RecordingSafety.notificationOverlay(bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)) {
                 throw RecorderError.message(reason)
             }
             if sessionCaptureRegion == nil && !recording { return } // Navigation can rebind a resized window before capture.
@@ -1922,11 +1929,25 @@ final class AppModel: ObservableObject {
         stopping = false
         if session.unlocked { showWindow() }
     }
-    private func prepareRecordingQuiet() async {
+    private func prepareRecordingQuiet() async throws {
         guard settings.quietNotifications else { return }
-        notificationQuietStatus = await quietSession.begin()
-        addLog(notificationQuietStatus)
-        quietRecoveryAvailable = quietSession.canRecover
+        var recoveryAuthorized = false
+        while true {
+            try Task.checkCancellation()
+            if recoveryAuthorized, quietSession.canRecover, let recovered = await quietSession.end(recoverPreviousSession: true) {
+                notificationQuietStatus = recovered; addLog(recovered)
+            }
+            notificationQuietStatus = await quietSession.begin()
+            addLog(notificationQuietStatus)
+            quietRecoveryAvailable = quietSession.canRecover
+            try Task.checkCancellation()
+            if quietSession.confirmed { return }
+            if quietSession.needsCleanup, let recovered = await quietSession.end() { addLog(recovered) }
+            quietRecoveryAvailable = quietSession.canRecover
+            try await awaitAssistance("尚未确认录制静默，任务保持等待。请在控制中心开启勿扰；若有上次恢复记录，下方按钮会先恢复再重新检查。未发送播放点击，也未开始录制。",
+                buttonTitle: quietSession.canRecover ? "恢复并重新检查" : "重新检查静默状态", restoreWindow: false)
+            recoveryAuthorized = true
+        }
     }
     func recoverNotificationSettings() {
         guard !busy, quietRecoveryAvailable else { return }

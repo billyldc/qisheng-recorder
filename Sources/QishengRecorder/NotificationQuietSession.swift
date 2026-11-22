@@ -220,6 +220,7 @@ final class NotificationQuietSession {
     private var lease: NotificationQuietLease?
     private var savedRecovery: NotificationQuietLease?
     private var unreadableRecovery = false
+    private(set) var confirmed = false
     var needsCleanup: Bool { lease != nil }
     var canRecover: Bool { savedRecovery != nil || lease != nil || unreadableRecovery }
 
@@ -246,26 +247,30 @@ final class NotificationQuietSession {
         lease = nil; savedRecovery = nil; unreadableRecovery = false
     }
     func begin() async -> String {
-        guard !canRecover else { return "上次勿扰恢复记录仍在；本次保留系统现状，可在录制结束后恢复。" }
+        confirmed = false
+        guard !canRecover else { return "上次勿扰恢复记录仍在；尚未确认本次静默，请先明确恢复并重新检查。" }
         do {
             try Task.checkCancellation()
             let original = try await backend.read()
-            if let active = original.activeID, active != SystemFocusState.doNotDisturb {
-                return "已有系统专注模式，保持原模式及定时计划；消息仍遵循该模式的允许清单。"
-            }
             guard let change = NotificationQuietLease(previous: original) else {
+                confirmed = true
                 return "系统勿扰原本已开启，结束后保持开启。"
             }
             try Task.checkCancellation()
             try remember(change)
             lease = change
             try await backend.set(.init(activeID: SystemFocusState.doNotDisturb), expecting: original)
-            return "本批已开启系统勿扰；录完或停止后恢复录制前的专注模式。"
+            guard try await backend.read().activeID == SystemFocusState.doNotDisturb else {
+                throw RecorderError.message("系统勿扰尚未稳定开启。")
+            }
+            confirmed = true
+            return "已确认系统勿扰开启；本批暂时覆盖原专注模式，保存或停止后恢复原模式。"
         } catch {
-            return "未能确认自动勿扰：\(error.localizedDescription) 录制不会因此退出。"
+            return "未能确认系统勿扰：\(error.localizedDescription) 尚未开始新的录制。"
         }
     }
     func end(recoverPreviousSession: Bool = false) async -> String? {
+        confirmed = false
         if unreadableRecovery && recoverPreviousSession {
             do {
                 guard try await backend.read().activeID != SystemFocusState.doNotDisturb else {

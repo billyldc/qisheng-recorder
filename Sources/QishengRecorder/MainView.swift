@@ -231,7 +231,7 @@ struct MainView: View {
                         HStack(alignment: .top) {
                             Text(message).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                             Spacer()
-                            Button(action: model.continueAutomation) { Label("恢复窗口并继续", systemImage: "play.fill") }
+                            Button(action: model.continueAutomation) { Label(model.assistanceButtonTitle, systemImage: "play.fill") }
                                 .help("只恢复所选窗口，再重新识别；不会补发旧点击或关闭未知弹窗。")
                         }
                     }
@@ -264,7 +264,7 @@ struct MainView: View {
                 }.toggleStyle(.checkbox).disabled(model.busy || model.selectionActive)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Toggle("录制期间消息免打扰", isOn: $model.settings.quietNotifications)
+                        Toggle("录制期间抑制系统通知", isOn: $model.settings.quietNotifications)
                             .toggleStyle(.checkbox).disabled(model.busy || model.selectionActive)
                         if model.quietRecoveryAvailable && !model.busy {
                             Button(action: model.recoverNotificationSettings) {
@@ -272,7 +272,8 @@ struct MainView: View {
                             }
                         }
                     }
-                    controlNote("开录前开启系统勿扰，录完或停止后恢复。已有专注模式时保留原模式和定时计划；系统允许的联系人、App 和紧急提醒仍可能出现。")
+                    controlNote("开录前强制开启并确认系统勿扰，保存或停止后恢复原模式；未确认则等待，不会悄悄开录。请在勿扰设置中关闭允许的联系人、App、时效性与智能放行。")
+                    controlNote("紧急提醒、系统安全弹窗不保证可屏蔽；勿扰无法控制时会提示。其他专注模式会临时被覆盖，系统倒计时与自动计划仍由 macOS 管理。")
                     controlNote("若系统开启专注模式跨设备共享，勿扰也会同步到其他设备；不会自动更改该设置。意外退出后可在这里恢复。")
                     if !model.notificationQuietStatus.isEmpty { controlNote(model.notificationQuietStatus) }
                 }

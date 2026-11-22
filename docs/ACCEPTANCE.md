@@ -129,7 +129,7 @@ release's notes.
 `QishengRecorder --update-self-test` exercises temporary signed fixtures and
 subprocess cancellation, not the user's actual installation or GitHub login.
 
-## Unreleased resilience checks
+## Version 1.7 resilience checks
 
 - `QishengRecorder --keepalive-self-test` checks AX identity deduplication,
   repeated paths and rejection of genuinely ambiguous selection, without input.
@@ -148,7 +148,8 @@ subprocess cancellation, not the user's actual installation or GitHub login.
   delayed observations. It requires fresh paired evidence before movement or
   arrival; an indoor map label never authorizes an outdoor teleport route.
 - `QishengRecorder --quiet-self-test` uses only a fake backend. It checks normal
-  cleanup, existing Focus, manual changes, partial application/cancellation,
+  cleanup, temporary override/restoration of another Focus, already-enabled DND,
+  confirmed activation, manual changes, partial application/cancellation,
   restore failure and deliberate crash-journal recovery without changing macOS.
 - `QishengRecorder --capture-resilience-self-test` is an opt-in local live check,
   not run by CI. It requires existing screen/accessibility permissions and never
@@ -156,6 +157,11 @@ subprocess cancellation, not the user's actual installation or GitHub login.
   window, adds an occluding panel, activates another app, decodes the MP4, then
   restores Focus and releases power assertions. A failed cleanup must retain its
   recovery journal. It never connects to a game or validates cloud keep-alive.
+- Region-focus tests permit only the explicitly excluded notification/control
+  center bundle IDs. Unknown apps still stop; lock/missing-target conditions
+  override the overlay exception. A browser-media experiment is documented
+  separately in [BROWSER-CAPTURE.md](BROWSER-CAPTURE.md); it is not a game or
+  actual notification-delivery acceptance test.
 - Live release acceptance still requires a permitted cloud session: outdoor
   assistance/resumption, all selected rows, both orientations, interruption at
   every click, menus/animations and delayed controls. Offline fixtures and the

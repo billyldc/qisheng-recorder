@@ -7,6 +7,7 @@ private final class FakeRecordingFocus: RecordingFocusBackend {
     var writes: [SystemFocusState] = []
     var failRead = false
     var failBeforeChange = false
+    var ignoreChange = false
     var cancelAfterChange = false
     var failRestore = false
     func read() async throws -> SystemFocusState {
@@ -15,6 +16,7 @@ private final class FakeRecordingFocus: RecordingFocusBackend {
     }
     func set(_ desired: SystemFocusState, expecting previous: SystemFocusState) async throws {
         guard !failBeforeChange, state == previous else { throw RecorderError.message("Synthetic state conflict") }
+        if ignoreChange { return }
         if failRestore && desired.activeID != SystemFocusState.doNotDisturb { throw RecorderError.message("Synthetic restore failure") }
         state = desired; writes.append(desired)
         if cancelAfterChange { cancelAfterChange = false; throw CancellationError() }
@@ -32,7 +34,7 @@ func runNotificationQuietSelfTest() {
             let quiet = NotificationQuietSession(backend: fake, journal: journal)
             let dnd = SystemFocusState(activeID: SystemFocusState.doNotDisturb)
             _ = await quiet.begin()
-            precondition(quiet.needsCleanup && fake.state == dnd)
+            precondition(quiet.needsCleanup && quiet.confirmed && fake.state == dnd)
             _ = await quiet.begin()
             precondition(fake.writes.count == 1, "Repeated begin must not overwrite the original state")
             _ = await quiet.end()
@@ -42,13 +44,17 @@ func runNotificationQuietSelfTest() {
             precondition(fake.writes.count == 2)
 
             fake.state = dnd; fake.writes = []
-            _ = await quiet.begin(); _ = await quiet.end()
+            _ = await quiet.begin()
+            precondition(quiet.confirmed && !quiet.needsCleanup)
+            _ = await quiet.end()
             precondition(fake.state == dnd && fake.writes.isEmpty)
             let work = SystemFocusState(activeID: "focus-mode-activity-test-work")
             fake.state = work
-            _ = await quiet.begin(); _ = await quiet.end()
-            precondition(fake.state == work)
-            precondition(fake.writes.isEmpty, "Do not replace an existing focus and its schedule")
+            _ = await quiet.begin()
+            precondition(fake.state == dnd && quiet.confirmed, "Recording must not inherit another focus's allowed notifications")
+            _ = await quiet.end()
+            precondition(fake.state == work && !quiet.confirmed)
+            precondition(fake.writes == [dnd, work], "Restore the original focus after overriding it")
 
             fake.state = .init(activeID: nil)
             _ = await quiet.begin()
@@ -58,14 +64,21 @@ func runNotificationQuietSelfTest() {
 
             fake.state = .init(activeID: nil); fake.failBeforeChange = true
             _ = await quiet.begin()
-            precondition(fake.state.activeID == nil)
+            precondition(fake.state.activeID == nil && !quiet.confirmed)
             fake.failBeforeChange = false
+            _ = await quiet.end()
+            precondition(!quiet.canRecover)
+
+            fake.ignoreChange = true
+            _ = await quiet.begin()
+            precondition(!quiet.confirmed && fake.state.activeID == nil, "An acknowledged click is not proof that DND is active")
+            fake.ignoreChange = false
             _ = await quiet.end()
             precondition(!quiet.canRecover)
 
             fake.cancelAfterChange = true
             _ = await quiet.begin()
-            precondition(fake.state == dnd && quiet.needsCleanup)
+            precondition(fake.state == dnd && quiet.needsCleanup && !quiet.confirmed)
             _ = await quiet.end()
             precondition(fake.state.activeID == nil && !quiet.canRecover)
 

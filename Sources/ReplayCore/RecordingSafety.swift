@@ -16,15 +16,18 @@ public enum ClickSafety {
 }
 
 public enum RecordingSafety {
+    public static func notificationOverlay(bundleID: String?) -> Bool {
+        bundleID == "com.apple.notificationcenterui" || bundleID == "com.apple.controlcenter"
+    }
     public static func unavailableWindow(onScreen: Bool, minimized: Bool, fullWindow: Bool, unattended: Bool) -> Bool {
         minimized || (!onScreen && !fullWindow)
     }
     // Window capture tolerates occlusion; display-region capture does not.
     public static func interruption(unlocked: Bool, targetExists: Bool, fullWindow: Bool,
-                                    unattended: Bool, focusLostSeconds: Double) -> String? {
+                                    unattended: Bool, focusLostSeconds: Double, excludedSystemOverlay: Bool = false) -> String? {
         if !unlocked { return "桌面已锁定或用户会话已切换。当前片段已保存；解锁后返回收藏列表重新开始。" }
         if !targetExists { return "目标窗口已关闭。当前片段已保存，请重新选择窗口。" }
-        if focusLostSeconds > 0 && !fullWindow { return "区域录制的目标已离开前台。已保存片段；无人值守请使用全窗口模式。" }
+        if focusLostSeconds > 0 && !fullWindow && !excludedSystemOverlay { return "区域录制的目标已离开前台。已保存片段；无人值守请使用全窗口模式。" }
         // Independent-window capture tolerates focus changes; CaptureHealth
         // still requires real frames and growing encoded output.
         return nil

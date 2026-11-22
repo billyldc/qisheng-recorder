@@ -25,7 +25,9 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
         guard let display = content.displays.first(where: { $0.displayID == region.displayID }) else {
             throw RecorderError.message("选中的显示器已经断开，请重新选框。")
         }
-        let ownApps = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+        let excludedApps = content.applications.filter {
+            $0.processID == ProcessInfo.processInfo.processIdentifier || RecordingSafety.notificationOverlay(bundleID: $0.bundleIdentifier)
+        }
         let filter: SCContentFilter
         let config = SCStreamConfiguration()
         if let windowID = region.windowID {
@@ -36,7 +38,7 @@ final class ScreenRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegat
             config.ignoreShadowsSingleWindow = true
             config.includeChildWindows = false
         } else {
-            filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
+            filter = SCContentFilter(display: display, excludingApplications: excludedApps, exceptingWindows: [])
             config.sourceRect = region.sourceRect
         }
         // Independent-window streams ignore sourceRect on supported macOS versions.

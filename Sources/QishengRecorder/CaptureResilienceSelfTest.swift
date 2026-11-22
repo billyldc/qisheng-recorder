@@ -115,7 +115,7 @@ func runCaptureResilienceSelfTest() {
             original = try await backend.read()
             let message = await quiet.begin()
             let during = try await backend.read()
-            let expected = original!.activeID == nil ? SystemFocusState(activeID: SystemFocusState.doNotDisturb) : original!
+            let expected = SystemFocusState(activeID: SystemFocusState.doNotDisturb)
             print("Live quiet: \(message); state_matches_expected=\(during == expected)")
             guard during == expected, !message.hasPrefix("未能") else {
                 throw RecorderError.message("Live quiet activation was not confirmed")
